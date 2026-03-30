@@ -1,0 +1,15 @@
+aiogram
+pyrogram
+tgcrypto
+aiosqlite
+ffmpeg-python
+aiohttp
+requests
+yt-dlp
+Pillow
+python-dotenv
+basicsr>=1.4.2
+facexlib>=0.2.5
+gfpgan>=1.3.8
+realesrgan>=0.3.0
+opencv-python-headless

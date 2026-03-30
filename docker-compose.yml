@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: uniuni_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./sessions:/app/sessions
+      - ./backgrounds:/app/backgrounds
+      - ./video_tasks.db:/app/video_tasks.db
+    command: python bot.py
+
+  userbot:
+    build: .
+    container_name: uniuni_userbot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./downloads:/app/downloads
+      - ./sessions:/app/sessions
+      - ./backgrounds:/app/backgrounds
+      - ./video_tasks.db:/app/video_tasks.db
+    command: python userbot.py
+
