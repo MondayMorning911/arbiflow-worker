@@ -1,0 +1,17 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.env
+sessions/
+downloads/
+backgrounds/
+video_tasks.db
+*.log
+.DS_Store
