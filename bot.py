@@ -95,6 +95,7 @@ from new_modules.universal_loader import download_video_ytdlp
 from new_modules.watermark_master import add_watermark
 # from new_modules.split_screen_generator import generate_split_screen
 from new_modules.ai_object_remover import remove_object
+from new_modules.runpod_client import process_heavy_task, upload_to_catbox
 
 from dotenv import load_dotenv
 
