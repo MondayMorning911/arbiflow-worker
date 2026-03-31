@@ -904,10 +904,28 @@ async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
 async def handle_upscale_media(message: Message, state: FSMContext):
     file = message.photo[-1] if message.photo else (message.video if message.video else message.document)
     
-    # Check size
+    # Check size for direct download
     if getattr(file, 'file_size', 0) > 50 * 1024 * 1024:
-        await message.answer("❌ Файл слишком большой. Максимальный размер 50 МБ.")
-        return
+        # If it's a photo, it's usually small, but if it's a video/document, it might be large
+        if message.video or message.document:
+            meta = {
+                "user_id": message.from_user.id,
+                "mode": "upscale",
+                "file_unique_id": file.file_unique_id
+            }
+            try:
+                # Send meta first
+                await bot.send_message(USERBOT_ID, json.dumps(meta))
+                # Then forward the message
+                await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
+                await message.answer("⏳ Файл большой. Скачиваю через UserBot, это займет немного времени...")
+            except Exception as send_e:
+                await message.answer(f"❌ Ошибка отправки на обработку. Попробуйте позже.\nПодробности: {send_e}")
+            await state.clear()
+            return
+        else:
+            await message.answer("❌ Файл слишком большой. Максимальный размер 50 МБ.")
+            return
         
     ext = ".jpg" if message.photo else (".mp4" if message.video else os.path.splitext(file.file_name)[1])
     file_name = f"upscale_{uuid.uuid4()}{ext}"
@@ -916,7 +934,12 @@ async def handle_upscale_media(message: Message, state: FSMContext):
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     
     progress_msg = await message.answer("⏳ Скачивание файла...")
-    await bot.download(file.file_id, destination=input_path)
+    try:
+        await bot.download(file.file_id, destination=input_path)
+    except Exception as e:
+        await message.answer(f"❌ Ошибка скачивания: {e}")
+        await state.clear()
+        return
     
     await progress_msg.edit_text("⚙️ Обработка файла (Real-ESRGAN)...\nЭто может занять несколько минут, особенно для видео. Пожалуйста, подождите.")
     
@@ -1495,6 +1518,116 @@ async def polling_sqlite():
                         else:
                             await handle_large_file_upload(path, user_id, bot)
 
+                    elif mode == "upscale":
+                        async def process_upscale_bg(user_id, input_path):
+                            progress_msg = await bot.send_message(user_id, "⚙️ Улучшение качества (Upscale)...")
+                            
+                            async def update_progress(percent, text_status):
+                                filled = int(10 * percent / 100)
+                                bar = f"[{'▒' * filled}{'░' * (10 - filled)}]"
+                                msg_text = f"⚙️ {text_status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n{bar} {percent}%\n⏳ Пожалуйста, подождите..."
+                                try:
+                                    await progress_msg.edit_text(msg_text)
+                                except Exception:
+                                    pass
+                                    
+                            try:
+                                output_path = await process_heavy_task(
+                                    file_path=input_path,
+                                    task_name="upscale",
+                                    progress_callback=update_progress
+                                )
+                                
+                                try:
+                                    await progress_msg.delete()
+                                except Exception:
+                                    pass
+                                    
+                                file_size = get_file_size_mb(output_path)
+                                if file_size > MAX_TG_SIZE_MB:
+                                    await handle_large_file_upload(output_path, user_id, bot)
+                                else:
+                                    width, height = None, None
+                                    try:
+                                        def _get_info(p):
+                                            return ffmpeg.probe(p)
+                                        probe = await asyncio.to_thread(_get_info, output_path)
+                                        width, height = get_video_dimensions(probe)
+                                    except Exception:
+                                        pass
+                                    await bot.send_video(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!", width=width, height=height)
+                                    if os.path.exists(output_path):
+                                        os.remove(output_path)
+                                        
+                                if os.path.exists(input_path):
+                                    os.remove(input_path)
+                            except Exception as e:
+                                try:
+                                    await progress_msg.delete()
+                                except Exception:
+                                    pass
+                                await bot.send_message(user_id, f"❌ Ошибка при улучшении качества. Попробуйте позже.\nПодробности: {e}")
+                                
+                        asyncio.create_task(process_upscale_bg(user_id, path))
+                        await sqlite_db.delete_task(task_id)
+                        continue
+
+                    elif mode.startswith("ai_subs_"):
+                        position = mode.split("_")[-1]
+                        async def process_subs_bg(user_id, input_path, pos):
+                            progress_msg = await bot.send_message(user_id, "⚙️ Наложение субтитров...")
+                            
+                            async def update_progress(percent, text_status):
+                                filled = int(10 * percent / 100)
+                                bar = f"[{'▒' * filled}{'░' * (10 - filled)}]"
+                                msg_text = f"⚙️ {text_status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n{bar} {percent}%\n⏳ Пожалуйста, подождите..."
+                                try:
+                                    await progress_msg.edit_text(msg_text)
+                                except Exception:
+                                    pass
+                                    
+                            try:
+                                output_path = await process_heavy_task(
+                                    file_path=input_path,
+                                    task_name="ai_subs",
+                                    progress_callback=update_progress,
+                                    position=pos
+                                )
+                                
+                                try:
+                                    await progress_msg.delete()
+                                except Exception:
+                                    pass
+                                    
+                                file_size = get_file_size_mb(output_path)
+                                if file_size > MAX_TG_SIZE_MB:
+                                    await handle_large_file_upload(output_path, user_id, bot)
+                                else:
+                                    width, height = None, None
+                                    try:
+                                        def _get_info(p):
+                                            return ffmpeg.probe(p)
+                                        probe = await asyncio.to_thread(_get_info, output_path)
+                                        width, height = get_video_dimensions(probe)
+                                    except Exception:
+                                        pass
+                                    await bot.send_video(user_id, FSInputFile(output_path), caption="✅ Субтитры добавлены!", width=width, height=height)
+                                    if os.path.exists(output_path):
+                                        os.remove(output_path)
+                                        
+                                if os.path.exists(input_path):
+                                    os.remove(input_path)
+                            except Exception as e:
+                                try:
+                                    await progress_msg.delete()
+                                except Exception:
+                                    pass
+                                await bot.send_message(user_id, f"❌ Ошибка при наложении субтитров. Попробуйте позже.\nПодробности: {e}")
+                                
+                        asyncio.create_task(process_subs_bg(user_id, path, position))
+                        await sqlite_db.delete_task(task_id)
+                        continue
+
                     elif mode == "ai_translate":
                         async def process_translate_bg(user_id, input_path):
                             progress_msg = await bot.send_message(user_id, "⚙️ Подготовка видео (перевод)...")
@@ -1577,7 +1710,7 @@ async def polling_sqlite():
 
 
 # Вместо send_video используем send_document
-@dp.message(F.from_user.id != USERBOT_ID, F.content_type.in_({ContentType.VIDEO, ContentType.DOCUMENT}))
+@dp.message(StateFilter(None), F.from_user.id != USERBOT_ID, F.content_type.in_({ContentType.VIDEO, ContentType.DOCUMENT}))
 async def handle_video_file(message: Message, state: FSMContext):
     data = await state.get_data()
     mode = data.get("mode")

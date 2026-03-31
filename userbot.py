@@ -209,7 +209,7 @@ async def process_video(app: Client, video_msg: Message, meta: dict):
 
             await mark_ready(user_id=user_id, path=unique_path, mode="single")
 
-        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode == "ai_translate" or mode == "watermark":
+        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode == "ai_translate" or mode == "watermark" or mode == "upscale":
             await video_msg.reply(f"✅ Видео скачано для {mode}. Передаю боту...")
             await mark_ready(user_id=user_id, path=video_path, mode=mode)
 
