@@ -172,11 +172,13 @@ def handler(job):
     job_id = job.get("id")
     send_debug(f"⚡️ Задание ID: {job_id}")
     job_input = job.get("input", {})
-    task = job_input.get("task", "ai_subs")
+    task = job_input.get("task")
     video_url = job_input.get("video_url")
     
     if not video_url:
         return {"error": "No video_url provided"}
+    if not task:
+        return {"error": "No task provided"}
 
     input_video = os.path.join(TEMP_PATH, f"in_{job_id}.mp4")
     output_video = os.path.join(TEMP_PATH, f"out_{job_id}.mp4")
@@ -232,51 +234,6 @@ def handler(job):
                 send_debug(f"❌ Ошибка FFmpeg:\n{stderr[-500:]}")
                 raise Exception("FFmpeg failed")
                 
-        elif task == "split_screen":
-            send_debug("🔥 Рендер FFmpeg (Split-Screen)...")
-            bg_url = job_input.get("bg_url")
-            if not bg_url:
-                raise Exception("No bg_url provided for split_screen")
-                
-            bg_video = os.path.join(TEMP_PATH, f"bg_{job_id}.mp4")
-            download_file(bg_url, bg_video)
-            
-            try:
-                # Get duration of top video
-                probe = ffmpeg.probe(input_video)
-                duration = float(probe['format']['duration'])
-                
-                # Complex filter for split screen with blur
-                top = ffmpeg.input(input_video)
-                bottom = ffmpeg.input(bg_video).filter('loop', loop=-1, size=32767, start=0).filter('trim', duration=duration)
-                
-                # Scale top video to fit top half (1080x960)
-                top_scaled = top.video.filter('scale', 1080, 960, force_original_aspect_ratio='decrease').filter('pad', 1080, 960, '(ow-iw)/2', '(oh-ih)/2')
-                
-                # Scale bottom video to fit bottom half (1080x960) and crop
-                bottom_scaled = bottom.video.filter('scale', 1080, 960, force_original_aspect_ratio='increase').filter('crop', 1080, 960)
-                
-                # Stack them vertically
-                stacked = ffmpeg.filter([top_scaled, bottom_scaled], 'vstack')
-                
-                (
-                    ffmpeg
-                    .output(stacked, top.audio, output_video, 
-                            vcodec='libx264', 
-                            acodec='aac',
-                            preset='ultrafast',
-                            crf=23,
-                            shortest=None)
-                    .overwrite_output()
-                    .run(capture_stdout=True, capture_stderr=True)
-                )
-            except ffmpeg.Error as e:
-                stderr = e.stderr.decode()
-                send_debug(f"❌ Ошибка FFmpeg:\n{stderr[-500:]}")
-                raise Exception("FFmpeg failed")
-            finally:
-                if os.path.exists(bg_video): os.remove(bg_video)
-                
         elif task == "upscale":
             send_debug("✨ Апскейл видео/фото (Real-ESRGAN)...")
             try:
@@ -285,6 +242,7 @@ def handler(job):
                 from realesrgan import RealESRGANer
                 
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                # Real-ESRGAN x4plus model
                 model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
                 model_path = '/app/weights/RealESRGAN_x4plus.pth'
                 
@@ -300,28 +258,25 @@ def handler(job):
                     device=device
                 )
                 
-                scale_factor = 2
+                # We use outscale=2 or 4. Let's use 2 for better speed/quality balance, or 4 for max quality.
+                # User asked "точно поднимает качество", so let's use 4.
+                scale_factor = 4
                 
-                # Check if it's an image or video based on extension or probe
+                # Check if it's an image or video
                 is_image = False
                 try:
                     probe = ffmpeg.probe(input_video)
                     if not any(s['codec_type'] == 'video' for s in probe['streams']):
                         is_image = True
-                    elif len(probe['streams']) == 1 and probe['streams'][0]['codec_type'] == 'video' and probe['streams'][0].get('nb_frames', '0') == '1':
-                        is_image = True
                 except:
-                    # If probe fails, assume it might be an image if it has a common image extension
                     if input_video.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
                         is_image = True
                 
                 if is_image:
                     send_debug("🖼 Обработка изображения...")
                     img = cv2.imread(input_video, cv2.IMREAD_COLOR)
-                    if img is None:
-                        raise Exception("Failed to read image with cv2")
                     output, _ = upscaler.enhance(img, outscale=scale_factor)
-                    output_video = output_video.replace('.mp4', '.jpg') # Change extension for output
+                    output_video = output_video.replace('.mp4', '.jpg')
                     cv2.imwrite(output_video, output)
                 else:
                     send_debug("🎥 Обработка видео...")
@@ -337,50 +292,33 @@ def handler(job):
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     out = cv2.VideoWriter(temp_video_path, fourcc, fps, (out_width, out_height))
                     
-                    frame_count = 0
                     while cap.isOpened():
                         ret, frame = cap.read()
                         if not ret: break
                         enhanced_frame, _ = upscaler.enhance(frame, outscale=scale_factor)
                         out.write(enhanced_frame)
-                        frame_count += 1
-                        if frame_count % 100 == 0:
-                            send_debug(f"Обработано {frame_count} кадров...")
                             
                     cap.release()
                     out.release()
                     
-                    # Merge audio
+                    # Merge audio from original video
                     try:
                         input_vid = ffmpeg.input(temp_video_path)
                         input_aud = ffmpeg.input(input_video)
                         ffmpeg.output(input_vid.video, input_aud.audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, quiet=True)
-                    except ffmpeg.Error:
-                        # If no audio or merge fails, just copy the video
-                        import shutil
+                    except:
                         shutil.copy(temp_video_path, output_video)
                     finally:
-                        if os.path.exists(temp_video_path):
-                            os.remove(temp_video_path)
+                        if os.path.exists(temp_video_path): os.remove(temp_video_path)
                 
-            except ImportError:
-                send_debug("⚠️ RealESRGAN не установлен в воркере, использую базовый апскейл FFmpeg")
-                try:
-                    (
-                        ffmpeg
-                        .input(input_video)
-                        .output(output_video, 
-                                vf="scale=iw*2:ih*2:flags=lanczos", 
-                                vcodec='libx264', 
-                                acodec='copy',
-                                preset='ultrafast',
-                                crf=18)
-                        .overwrite_output()
-                        .run(capture_stdout=True, capture_stderr=True)
-                    )
-                except ffmpeg.Error as e:
-                    stderr = e.stderr.decode()
-                    raise Exception(f"FFmpeg upscale failed: {stderr[-500:]}")
+            except Exception as e:
+                send_debug(f"⚠️ Ошибка RealESRGAN: {e}. Использую Lanczos...")
+                (
+                    ffmpeg
+                    .input(input_video)
+                    .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos", vcodec='libx264', acodec='copy')
+                    .run(overwrite_output=True, quiet=True)
+                )
         elif task == "ai_voice":
             send_debug("🎙 Озвучка текста...")
             voice_text = job_input.get("voice_text")

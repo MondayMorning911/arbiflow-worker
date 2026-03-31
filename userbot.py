@@ -43,8 +43,11 @@ DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 # 🔐 Настройки
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH")
-SESSION_NAME = os.path.join(BASE_DIR, "sessions", "userbot")
 MAIN_BOT_ID = int(os.getenv("MAIN_BOT_ID", "0"))
+USERBOT_ID = os.getenv("USERBOT_ID", "userbot")
+
+# Определяем имя сессии: если есть USERBOT_ID, используем его, иначе дефолтное "userbot"
+SESSION_NAME = os.path.join(BASE_DIR, "sessions", USERBOT_ID)
 
 def fix_session_database(session_path):
     """Исправляет ошибки структуры для старых сессий Pyrogram (number, test_mode, user_id, is_bot)"""
@@ -110,6 +113,14 @@ def fix_session_database(session_path):
 
 # Исправляем сессию перед созданием клиента
 fix_session_database(SESSION_NAME)
+
+# Проверяем наличие файла сессии, чтобы избежать EOFError при попытке ввода номера телефона
+full_session_path = SESSION_NAME if SESSION_NAME.endswith(".session") else f"{SESSION_NAME}.session"
+if not os.path.exists(full_session_path):
+    logging.error(f"❌ [UserBot] Файл сессии не найден по пути: {full_session_path}")
+    logging.error("[UserBot] Пожалуйста, загрузите файл сессии в папку 'sessions/' или авторизуйтесь локально.")
+    sys.exit(1)
+
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
 
 semaphore = asyncio.Semaphore(3)  # максимум 3 задачи одновременно

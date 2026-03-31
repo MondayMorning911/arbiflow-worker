@@ -93,7 +93,7 @@ async def send_file_safely(message: Message, file_path: str, caption: str = "✅
 
 from new_modules.universal_loader import download_video_ytdlp
 from new_modules.watermark_master import add_watermark
-# from new_modules.split_screen_generator import generate_split_screen
+from new_modules.split_screen_generator import generate_split_screen
 from new_modules.ai_object_remover import remove_object
 from new_modules.runpod_client import process_heavy_task, upload_to_catbox
 
@@ -940,9 +940,9 @@ async def handle_upscale_media(message: Message, state: FSMContext):
         await progress_msg.edit_text("✅ Обработка завершена! Отправляю файл...")
         
         if ext.lower() in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
-            await message.answer_video(FSInputFile(output_path), caption="✨ Качество улучшено (x2)!")
+            await message.answer_video(FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
         else:
-            await message.answer_photo(FSInputFile(output_path), caption="✨ Качество улучшено (x2)!")
+            await message.answer_photo(FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
             
     except Exception as e:
         logging.error(f"Error in upscale: {e}")
@@ -1432,15 +1432,12 @@ async def polling_sqlite():
                                 
                                 output_path = os.path.join(DOWNLOAD_DIR, f"split_{uuid.uuid4().hex[:8]}.mp4")
 
-                                await update_progress(5, "Загрузка файлов...")
-                                user_url = await upload_to_catbox(user_path)
-                                bg_url = await upload_to_catbox(bg_path) if bg_path else None
-                                
-                                output_path = await process_heavy_task(
-                                    file_path=user_path,
-                                    task_name="split_screen",
+                                await update_progress(5, "Обработка видео (локально)...")
+                                await generate_split_screen(
+                                    user_video=user_path,
+                                    background_video=bg_path,
+                                    output_video=output_path,
                                     progress_callback=lambda p, m: update_progress(p, m),
-                                    bg_url=bg_url,
                                     is_vertical=is_vertical
                                 )
                                 
