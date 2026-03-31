@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import uuid
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import Message, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
@@ -2109,6 +2110,11 @@ async def handle_userbot_forward(message: Message):
         logging.error(f"[MainBot] ❌ Ошибка при пересылке файла от обработчика: {e}", exc_info=True)
 
 if __name__ == "__main__":
+    # Safety check: do not run the bot on RunPod
+    if os.getenv("RUNPOD_POD_ID") or os.getenv("RUNPOD_ENDPOINT_ID"):
+        logging.error("[MainBot] ⚠️ Detected RunPod environment. Bot will not start here.")
+        sys.exit(0)
+
     logging.basicConfig(level=logging.INFO)
 
     async def main():

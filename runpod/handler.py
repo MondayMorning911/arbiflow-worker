@@ -29,14 +29,16 @@ send_debug("🚀 Скрипт запущен! Начинаю инициализ�
 # --- CONFIGURATION ---
 VOLUME_PATH = "/runpod-volume"
 MODEL_PATH = os.path.join(VOLUME_PATH, "models")
-# Пытаемся найти шрифт в корне или в папке fonts
+# Пытаемся найти шрифт в корне, в папке runpod или в папке fonts
 BASE_DIR = os.getcwd()
 FONT_PATH = os.path.join(BASE_DIR, "SoyuzGroteskBold.ttf")
 if not os.path.exists(FONT_PATH):
-    FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
+    FONT_PATH = os.path.join(BASE_DIR, "runpod", "SoyuzGroteskBold.ttf")
     if not os.path.exists(FONT_PATH):
-        # Fallback
-        FONT_PATH = "/app/fonts/font.ttf"
+        FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
+        if not os.path.exists(FONT_PATH):
+            # Fallback
+            FONT_PATH = "/app/fonts/font.ttf"
 
 FONT_DIR = os.path.dirname(FONT_PATH)
 TEMP_PATH = "/tmp/arbiflow"

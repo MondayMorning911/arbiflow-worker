@@ -425,4 +425,8 @@ def main():
     app.run()  # 🔥 ОБЯЗАТЕЛЕН ЗАПУСК!
 
 if __name__ == "__main__":
+    # Safety check: do not run the userbot on RunPod
+    if os.getenv("RUNPOD_POD_ID") or os.getenv("RUNPOD_ENDPOINT_ID"):
+        logging.error("[UserBot] ⚠️ Detected RunPod environment. UserBot will not start here.")
+        sys.exit(0)
     main()
