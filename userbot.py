@@ -193,7 +193,17 @@ async def process_video(app: Client, video_msg: Message, meta: dict):
 
         # Переопределяем функцию progress внутри download_video, чтобы она обновляла сообщение
         media = video_msg.video or video_msg.document
-        file_name = media.file_name or f"{media.file_unique_id}.mp4"
+        ext = ".mp4"
+        if hasattr(media, 'mime_type') and media.mime_type:
+            if media.mime_type.startswith('image/'):
+                ext = ".jpg"
+        
+        file_name = media.file_name
+        if not file_name:
+            file_name = f"{media.file_unique_id}{ext}"
+        elif not os.path.splitext(file_name)[1]:
+            file_name += ext
+            
         user_dir = os.path.join(DOWNLOAD_DIR, f"user_{user_id}")
         os.makedirs(user_dir, exist_ok=True)
         video_path = os.path.join(user_dir, file_name)

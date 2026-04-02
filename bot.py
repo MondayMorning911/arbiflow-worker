@@ -843,7 +843,9 @@ async def handle_upscale_file(message: Message, state: FSMContext):
 
     ext = ".jpg" if is_photo else ".mp4"
     if hasattr(file, 'file_name') and file.file_name:
-        ext = os.path.splitext(file.file_name)[1]
+        _, file_ext = os.path.splitext(file.file_name)
+        if file_ext:
+            ext = file_ext
         
     file_name = f"upscale_in_{uuid.uuid4()}{ext}"
     input_path = os.path.join(DOWNLOAD_DIR, file_name)
@@ -891,7 +893,7 @@ async def handle_upscale_file(message: Message, state: FSMContext):
             file_path=input_path,
             task_name="upscale",
             progress_callback=update_progress,
-            is_image=is_image
+            is_image=is_photo
         )
         
         try:

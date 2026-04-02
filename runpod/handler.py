@@ -274,6 +274,14 @@ def handler(job):
                 
                 # Check if it's an image or video
                 is_image = job_input.get("is_image", False)
+                if not is_image:
+                    try:
+                        probe = ffmpeg.probe(input_video)
+                        if not any(s['codec_type'] == 'video' for s in probe['streams']):
+                            is_image = True
+                    except:
+                        if input_video.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                            is_image = True
                 
                 if is_image:
                     send_debug("🖼 Обработка изображения...")
@@ -316,12 +324,24 @@ def handler(job):
                 
             except Exception as e:
                 send_debug(f"⚠️ Ошибка апскейла: {e}. Использую Lanczos...")
-                (
-                    ffmpeg
-                    .input(input_video)
-                    .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos", vcodec='libx264', acodec='copy')
-                    .run(overwrite_output=True, quiet=True)
-                )
+                try:
+                    if is_image:
+                        output_video = output_video.replace('.mp4', '.jpg')
+                        (
+                            ffmpeg
+                            .input(input_video)
+                            .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos")
+                            .run(overwrite_output=True, quiet=True)
+                        )
+                    else:
+                        (
+                            ffmpeg
+                            .input(input_video)
+                            .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos", vcodec='libx264', acodec='copy')
+                            .run(overwrite_output=True, quiet=True)
+                        )
+                except Exception as fallback_e:
+                    raise Exception(f"Fallback failed: {fallback_e}")
         elif task == "ai_voice":
             send_debug("🎙 Озвучка текста...")
             voice_text = job_input.get("voice_text")
