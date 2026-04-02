@@ -820,7 +820,12 @@ async def handle_download_actions(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "action_upscale")
 async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("✨ Отправьте фото или видео для улучшения качества (апскейла):")
+    await call.message.edit_text(
+        "✨ Отправьте фото или видео для улучшения качества (апскейла):\n\n"
+        "💡 *Совет:* Для наилучшего качества фото отправляйте его как **Документ** (Файл), "
+        "чтобы Telegram не сжимал его перед отправкой.",
+        parse_mode="Markdown"
+    )
     await state.set_state(UpscaleStates.waiting_file)
 
 @dp.message(StateFilter(UpscaleStates.waiting_file), F.content_type.in_({ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}))

@@ -192,10 +192,14 @@ def handler(job):
                 import cv2
                 from basicsr.archs.rrdbnet_arch import RRDBNet
                 from realesrgan import RealESRGANer
+                from gfpgan import GFPGANer
                 
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                 rrdb_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-                model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
+                
+                model_path = '/app/weights/RealESRGAN_x4plus.pth'
+                if not os.path.exists(model_path):
+                    model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
                 if not os.path.exists(model_path):
                     model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
                 
@@ -204,9 +208,23 @@ def handler(job):
                     tile=0, tile_pad=10, pre_pad=0, half=True, device=device
                 )
                 
+                face_enhancer = None
+                gfpgan_path = '/app/weights/GFPGANv1.4.pth'
+                if os.path.exists(gfpgan_path):
+                    face_enhancer = GFPGANer(
+                        model_path=gfpgan_path,
+                        upscale=4,
+                        arch='clean',
+                        channel_multiplier=2,
+                        bg_upsampler=upscaler
+                    )
+                
                 if is_image:
                     img = cv2.imread(input_video, cv2.IMREAD_COLOR)
-                    output, _ = upscaler.enhance(img, outscale=4)
+                    if face_enhancer:
+                        _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+                    else:
+                        output, _ = upscaler.enhance(img, outscale=4)
                     cv2.imwrite(output_video, output)
                 else:
                     cap = cv2.VideoCapture(input_video)
@@ -220,23 +238,39 @@ def handler(job):
                     while cap.isOpened():
                         ret, frame = cap.read()
                         if not ret: break
-                        enhanced_frame, _ = upscaler.enhance(frame, outscale=4)
+                        if face_enhancer:
+                            _, _, enhanced_frame = face_enhancer.enhance(frame, has_aligned=False, only_center_face=False, paste_back=True)
+                        else:
+                            enhanced_frame, _ = upscaler.enhance(frame, outscale=4)
                         out.write(enhanced_frame)
                     cap.release()
                     out.release()
                     
                     try:
-                        ffmpeg.output(ffmpeg.input(temp_video_path).video, ffmpeg.input(input_video).audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, quiet=True)
-                    except:
+                        probe = ffmpeg.probe(input_video)
+                        has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
+                        if has_audio:
+                            ffmpeg.output(ffmpeg.input(temp_video_path).video, ffmpeg.input(input_video).audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                        else:
+                            shutil.copy(temp_video_path, output_video)
+                    except ffmpeg.Error as e:
+                        print(f"FFmpeg merge error: {e.stderr.decode() if e.stderr else str(e)}", file=sys.stderr)
+                        shutil.copy(temp_video_path, output_video)
+                    except Exception as e:
+                        print(f"Merge error: {e}", file=sys.stderr)
                         shutil.copy(temp_video_path, output_video)
                 
             except Exception as e:
+                print(f"Upscale error: {e}", file=sys.stderr)
                 # Fallback to Lanczos
                 vf = "scale=iw*4:ih*4:flags=lanczos"
-                if is_image:
-                    ffmpeg.input(input_video).output(output_video, vf=vf).run(overwrite_output=True, quiet=True)
-                else:
-                    ffmpeg.input(input_video).output(output_video, vf=vf, vcodec='libx264', acodec='copy').run(overwrite_output=True, quiet=True)
+                try:
+                    if is_image:
+                        ffmpeg.input(input_video).output(output_video, vf=vf).run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                    else:
+                        ffmpeg.input(input_video).output(output_video, vf=vf, vcodec='libx264', acodec='copy').run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
+                except ffmpeg.Error as fe:
+                    raise Exception(f"FFmpeg fallback error: {fe.stderr.decode() if fe.stderr else str(fe)}")
 
         elif task == "ai_voice":
             voice_text = job_input.get("voice_text")
@@ -253,6 +287,9 @@ def handler(job):
         result_url = upload_to_catbox(output_video)
         return {"status": "success", "result_url": result_url}
 
+    except ffmpeg.Error as fe:
+        err_msg = fe.stderr.decode() if fe.stderr else str(fe)
+        return {"status": "error", "message": f"FFmpeg Error: {err_msg}", "traceback": traceback.format_exc()}
     except Exception as e:
         return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
     finally:
