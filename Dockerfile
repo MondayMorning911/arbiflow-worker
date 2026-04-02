@@ -13,7 +13,8 @@ WORKDIR /app
 
 # Установка Python-зависимостей
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir "numpy<2.0.0" && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Скачивание весов нейросетей (Real-ESRGAN и GFPGAN)
 RUN mkdir -p /app/weights && \
