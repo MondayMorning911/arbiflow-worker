@@ -534,9 +534,9 @@ def save_voices_db(db):
 
 voices_db = load_voices_db()
 
-@dp.message(F.audio | F.voice | F.document)
+@dp.message((F.audio | F.voice | F.document), F.caption.startswith("VOICE_REG:"))
 async def handle_voice_reg(message: Message):
-    caption = message.caption or message.text
+    caption = message.caption
     if caption and caption.startswith("VOICE_REG:"):
         parts = caption.split(":")
         if len(parts) >= 3:
@@ -820,7 +820,12 @@ async def handle_download_actions(call: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "action_upscale")
 async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("✨ Отправьте фото или видео для улучшения качества (апскейла):")
+    await call.message.edit_text(
+        "✨ Отправьте фото или видео для улучшения качества (апскейла):\n\n"
+        "💡 *Совет:* Для наилучшего качества фото отправляйте его как **Документ** (Файл), "
+        "чтобы Telegram не сжимал его перед отправкой.",
+        parse_mode="Markdown"
+    )
     await state.set_state(UpscaleStates.waiting_file)
 
 @dp.message(StateFilter(UpscaleStates.waiting_file), F.content_type.in_({ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}))
@@ -836,6 +841,10 @@ async def handle_upscale_file(message: Message, state: FSMContext):
         file = message.document
         if file.mime_type and file.mime_type.startswith('image/'):
             is_photo = True
+        elif file.file_name:
+            ext = os.path.splitext(file.file_name)[1].lower()
+            if ext in ['.jpg', '.jpeg', '.png', '.webp', '.bmp']:
+                is_photo = True
             
     if not file:
         await message.answer("❌ Пожалуйста, отправьте фото или видео.")
