@@ -6,7 +6,6 @@ import torch
 import ffmpeg
 import traceback
 import shutil
-from faster_whisper import WhisperModel
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -58,6 +57,7 @@ def get_model():
     global model
     if model is None:
         try:
+            from faster_whisper import WhisperModel
             send_debug(f"📦 Загружаю модель large-v3 в {MODEL_PATH}...")
             model = WhisperModel(
                 "large-v3", 
