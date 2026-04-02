@@ -6,60 +6,62 @@ import torch
 import ffmpeg
 import traceback
 import shutil
+import sys
 from dotenv import load_dotenv
-
-load_dotenv()
-
-# --- TELEGRAM LOGGING ---
-TG_TOKEN = os.getenv("TELEGRAM_API_TOKEN")
-TG_CHAT_ID = os.getenv("TELEGRAM_DEBUG_CHAT_ID")
 
 def send_debug(msg):
     try:
-        url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+        token = os.getenv("TELEGRAM_API_TOKEN")
+        chat_id = os.getenv("TELEGRAM_DEBUG_CHAT_ID")
+        if not token or not chat_id: return
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         text = str(msg)[:4000]
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": f"🤖 [ArbiFlow Debug]:\n{text}"}, timeout=5)
+        requests.post(url, json={"chat_id": chat_id, "text": f"🤖 [ArbiFlow Debug]:\n{text}"}, timeout=5)
     except:
         pass
 
-# Сигнал о старте
-send_debug("🚀 Скрипт запущен! Начинаю инициализацию...")
-
-# --- CONFIGURATION ---
-VOLUME_PATH = "/runpod-volume"
-MODEL_PATH = os.path.join(VOLUME_PATH, "models")
-# Пытаемся найти шрифт в корне, в папке runpod или в папке fonts
-BASE_DIR = os.getcwd()
-FONT_PATH = os.path.join(BASE_DIR, "SoyuzGroteskBold.ttf")
-if not os.path.exists(FONT_PATH):
-    FONT_PATH = os.path.join(BASE_DIR, "runpod", "SoyuzGroteskBold.ttf")
-    if not os.path.exists(FONT_PATH):
-        FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
-        if not os.path.exists(FONT_PATH):
-            # Fallback
-            FONT_PATH = "/app/fonts/font.ttf"
-
-FONT_DIR = os.path.dirname(FONT_PATH)
-TEMP_PATH = "/tmp/arbiflow"
-
+# --- GLOBAL WRAPPER ---
 try:
+    load_dotenv()
+    send_debug("🚀 Скрипт запущен! Начинаю инициализацию...")
+
+    # --- CONFIGURATION ---
+    VOLUME_PATH = "/runpod-volume"
+    MODEL_PATH = os.path.join(VOLUME_PATH, "models")
+    # Пытаемся найти шрифт
+    BASE_DIR = os.getcwd()
+    FONT_PATH = os.path.join(BASE_DIR, "SoyuzGroteskBold.ttf")
+    if not os.path.exists(FONT_PATH):
+        FONT_PATH = os.path.join(BASE_DIR, "runpod", "SoyuzGroteskBold.ttf")
+        if not os.path.exists(FONT_PATH):
+            FONT_PATH = os.path.join(BASE_DIR, "fonts", "font.ttf")
+            if not os.path.exists(FONT_PATH):
+                FONT_PATH = "/app/fonts/font.ttf"
+
+    FONT_DIR = os.path.dirname(FONT_PATH)
+    TEMP_PATH = "/tmp/arbiflow"
+
     os.makedirs(TEMP_PATH, exist_ok=True)
     os.makedirs(MODEL_PATH, exist_ok=True)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     COMPUTE_TYPE = "float16" if torch.cuda.is_available() else "int8"
     send_debug(f"⚙️ Конфиг готов. Device: {DEVICE}, Compute: {COMPUTE_TYPE}")
+
 except Exception as e:
-    send_debug(f"❌ Ошибка в конфиге:\n{traceback.format_exc()}")
+    err_msg = f"❌ ФАТАЛЬНАЯ ОШИБКА ПРИ СТАРТЕ:\n{traceback.format_exc()}"
+    print(err_msg, file=sys.stderr)
+    send_debug(err_msg)
+    # Мы не выходим, чтобы runpod мог попытаться запустить handler и показать ошибку там
 
-model = None
+whisper_model = None
 
-def get_model():
-    global model
-    if model is None:
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
         try:
             from faster_whisper import WhisperModel
             send_debug(f"📦 Загружаю модель large-v3 в {MODEL_PATH}...")
-            model = WhisperModel(
+            whisper_model = WhisperModel(
                 "large-v3", 
                 device=DEVICE, 
                 compute_type=COMPUTE_TYPE, 
@@ -69,10 +71,10 @@ def get_model():
         except Exception as e:
             send_debug(f"❌ Ошибка загрузки модели:\n{traceback.format_exc()}")
             raise e
-    return model
+    return whisper_model
 
 def download_file(url, dest):
-    send_debug(f"📥 Качаю видео. Ссылка: {url[:30]}...") 
+    send_debug(f"📥 Качаю файл. Ссылка: {url[:30]}...") 
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get(url, stream=True, timeout=300, headers=headers)
@@ -86,7 +88,7 @@ def download_file(url, dest):
 
 def upload_to_catbox(file_path):
     import time
-    send_debug("📤 Загрузка видео в облако...")
+    send_debug("📤 Загрузка в облако...")
     last_error = ""
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     for attempt in range(3):
@@ -132,9 +134,8 @@ def generate_ass_subtitles(segments, output_path, position="bottom", width=1080,
         margin_v = 0
     else:
         alignment = 2
-        margin_v = int(height * 0.13) # ~13% from bottom
+        margin_v = int(height * 0.13)
         
-    # Scale font size based on height to maintain relative size
     font_size = int(height * 0.04)
     outline = 3
     shadow = 1.5
@@ -207,7 +208,7 @@ def handler(job):
             position = job_input.get("position", "bottom")
             ass_file = os.path.join(TEMP_PATH, f"subs_{job_id}.ass")
             
-            model_instance = get_model()
+            model_instance = get_whisper_model()
             send_debug("🎙 Транскрибация...")
             segments, _ = model_instance.transcribe(
                 input_video, 
@@ -260,7 +261,7 @@ def handler(job):
                 
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                 # 4x-UltraSharp is an RRDBNet model
-                model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+                rrdb_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
                 model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
                 if not os.path.exists(model_path):
                     model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
@@ -269,7 +270,7 @@ def handler(job):
                     scale=4,
                     model_path=model_path,
                     dni_weight=None,
-                    model=model,
+                    model=rrdb_model,
                     tile=0,
                     tile_pad=10,
                     pre_pad=0,
@@ -360,7 +361,7 @@ def handler(job):
                     await communicate.save(output_audio)
                     
                 asyncio.run(generate_tts())
-                output_video = output_audio # Update output path for upload
+                output_video = output_audio
                 
             except ImportError:
                 send_debug("⚠️ edge-tts не установлен, использую заглушку")
@@ -370,16 +371,7 @@ def handler(job):
                 
         elif task == "ai_translate":
             send_debug("🌍 Перевод видео...")
-            # Placeholder for translation logic.
-            # Real implementation would involve:
-            # 1. Extract audio
-            # 2. Transcribe (faster-whisper)
-            # 3. Translate text
-            # 4. TTS (edge-tts or similar)
-            # 5. Merge new audio with original video
-            # For now, we'll just return the original video or a simple processed version
             send_debug("⚠️ Полный пайплайн перевода еще не реализован в воркере. Возвращаю исходное видео.")
-            import shutil
             shutil.copy(input_video, output_video)
             
         else:
@@ -394,19 +386,26 @@ def handler(job):
         send_debug(f"🚨 ОШИБКА:\n{err}")
         return {"status": "error", "message": str(e)}
     finally:
-        for f in [input_video, output_video]:
-            if os.path.exists(f):
+        # Безопасная очистка
+        files_to_clean = [
+            input_video, 
+            output_video,
+            os.path.join(TEMP_PATH, f"subs_{job_id}.ass"),
+            os.path.join(TEMP_PATH, f"temp_{job_id}.mp4"),
+            os.path.join(TEMP_PATH, f"in_{job_id}.jpg"),
+            os.path.join(TEMP_PATH, f"out_{job_id}.jpg"),
+            os.path.join(TEMP_PATH, f"out_{job_id}.mp3")
+        ]
+        for f in files_to_clean:
+            if f and os.path.exists(f):
                 try: os.remove(f)
                 except: pass
-        try:
-            ass_file = os.path.join(TEMP_PATH, f"subs_{job_id}.ass")
-            if os.path.exists(ass_file): os.remove(ass_file)
-        except: pass
-        try:
-            temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
-            if os.path.exists(temp_video_path): os.remove(temp_video_path)
-        except: pass
 
 if __name__ == "__main__":
-    send_debug("📡 Воркер готов!")
-    runpod.serverless.start({"handler": handler})
+    try:
+        send_debug("📡 Воркер готов к приему задач!")
+        runpod.serverless.start({"handler": handler})
+    except Exception as e:
+        err_msg = f"❌ ОШИБКА ПРИ ЗАПУСКЕ СЕРВЕРЛЕСС:\n{traceback.format_exc()}"
+        print(err_msg, file=sys.stderr)
+        send_debug(err_msg)

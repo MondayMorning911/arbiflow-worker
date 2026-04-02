@@ -11,3 +11,4 @@ realesrgan>=0.3.0
 opencv-python-headless
 edge-tts
 python-dotenv
+urllib3
