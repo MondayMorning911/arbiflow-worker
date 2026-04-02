@@ -7,6 +7,9 @@ import shutil
 import sys
 from dotenv import load_dotenv
 
+# Загружаем переменные окружения
+load_dotenv()
+
 # --- CONFIGURATION ---
 VOLUME_PATH = "/runpod-volume"
 MODEL_PATH = os.path.join(VOLUME_PATH, "models")
@@ -18,10 +21,13 @@ whisper_model = None
 def get_whisper_model():
     global whisper_model
     if whisper_model is None:
+        # Импортируем тяжелые библиотеки только здесь
         import torch
         from faster_whisper import WhisperModel
+        
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute_type = "float16" if torch.cuda.is_available() else "int8"
+        
         print(f"DEBUG: Loading Whisper on {device} with {compute_type}")
         whisper_model = WhisperModel(
             "large-v3", 
@@ -113,6 +119,7 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write("\n".join(lines))
 
 def handler(job):
+    # Импортируем библиотеки только внутри обработчика
     import ffmpeg
     import torch
     
