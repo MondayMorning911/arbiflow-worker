@@ -102,6 +102,41 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
+VOICES = {
+    "social": {
+        "name": "📱 Соцсети",
+        "voices": [
+            {"id": "bqbHGIIO5oETYIqhWmfk", "name": "Александр", "desc": "Социальные сети, мужской", "demo_file_id": None},
+            {"id": "xdADm9fX0hNasTe0AGW0", "name": "Алекс", "desc": "Социальные сети, мужской", "demo_file_id": None},
+            {"id": "bg9LrEYQkRYwqkxA8VOy", "name": "Леонид", "desc": "Социальные сети, мужской", "demo_file_id": None},
+            {"id": "ETBmMkYUh8i2exSl2h3P", "name": "Молли", "desc": "Социальные сети, женский", "demo_file_id": None},
+            {"id": "FZGeNF7bE3syeQOynDKC", "name": "Виктория", "desc": "Социальные сети, женский", "demo_file_id": None},
+        ]
+    },
+    "conversational": {
+        "name": "🗣 Разговорный",
+        "voices": [
+            {"id": "rQOBu7YxCDxGiFdTm28w", "name": "Артем", "desc": "Разговорный, мужской", "demo_file_id": None},
+            {"id": "foZmP0ldhGob3fHgegm1", "name": "Наталья", "desc": "Разговорный, женский", "demo_file_id": None},
+            {"id": "qfvGliTkPdDybwni40JM", "name": "Артур", "desc": "Разговорный, мужской", "demo_file_id": None},
+            {"id": "WxSABFURrEBEgQpoEAwt", "name": "Макс", "desc": "Разговорный, мужской", "demo_file_id": None},
+            {"id": "aTTiK3YzK3dXETpuDE2h", "name": "Бен", "desc": "Разговорный, мужской", "demo_file_id": None},
+        ]
+    },
+    "advertising": {
+        "name": "📢 Реклама",
+        "voices": [
+            {"id": "McVZB9hVxVSk3Equu8EH", "name": "Андрия", "desc": "Рекламный, женский", "demo_file_id": None},
+            {"id": "hU3rD0Yk7DoiYULTX1pD", "name": "Дмитрий", "desc": "Рекламный, уверенный", "demo_file_id": None},
+            {"id": "Dnd9VXpAjEGXiRGBf1O6", "name": "Паркер", "desc": "Рекламный, мужской", "demo_file_id": None},
+            {"id": "dXtC3XhB9GtPusIpNtQx", "name": "Егор", "desc": "Рекламный, мужской", "demo_file_id": None},
+            {"id": "QttbagfgqUCm9K0VgUyT", "name": "Аида", "desc": "Рекламный, женский", "demo_file_id": None},
+        ]
+    }
+}
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 BACKGROUNDS_DIR = os.path.join(BASE_DIR, "backgrounds")
@@ -130,10 +165,10 @@ class WatermarkStates(StatesGroup):
 class SplitScreenStates(StatesGroup):
     waiting_user_video = State()
 
-class UpscaleStates(StatesGroup):
-    waiting_media = State()
-
 class VoiceStates(StatesGroup):
+    choosing_category = State()
+    choosing_voice = State()
+    choosing_action = State()
     waiting_text = State()
 
 class SubsStates(StatesGroup):
@@ -141,7 +176,11 @@ class SubsStates(StatesGroup):
     waiting_video = State()
 
 class TranslateStates(StatesGroup):
+    waiting_language = State()
     waiting_video = State()
+
+class UpscaleStates(StatesGroup):
+    waiting_file = State()
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -171,8 +210,9 @@ def main_inline_keyboard():
         [InlineKeyboardButton(text="Видео", callback_data="ignore")],
         [InlineKeyboardButton(text="🪄 Уникализатор", callback_data="menu_unique"), InlineKeyboardButton(text="✂️ Split-Screen", callback_data="menu_split")],
         [InlineKeyboardButton(text="💧 Вотермарки", callback_data="menu_watermark"), InlineKeyboardButton(text="📥 Скачать", callback_data="menu_download")],
+        [InlineKeyboardButton(text="✨ Апскейл", callback_data="menu_upscale")],
         [InlineKeyboardButton(text="AI Голос и Текст", callback_data="ignore")],
-        [InlineKeyboardButton(text="✨ Апскейл", callback_data="menu_upscale"), InlineKeyboardButton(text="🎙 Озвучка", callback_data="menu_voice")],
+        [InlineKeyboardButton(text="🎙 Озвучка", callback_data="menu_voice")],
         [InlineKeyboardButton(text="📝 Субтитры", callback_data="menu_subs"), InlineKeyboardButton(text="🌍 Перевод", callback_data="menu_translate")],
         [InlineKeyboardButton(text="Системные кнопки", callback_data="ignore")],
         [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile"), InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")]
@@ -350,6 +390,20 @@ async def show_watermark_preview(call: CallbackQuery):
     ])
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
+@dp.callback_query(F.data == "menu_upscale")
+async def show_upscale_preview(call: CallbackQuery):
+    text = (
+        "✨ **Апскейл (Улучшение качества)**\n\n"
+        "Увеличение разрешения и улучшение качества фото и видео с помощью нейросетей.\n\n"
+        "💰 Стоимость: 10 кр / фото, 50 кр / мин видео\n"
+        "⏳ Время: 1-5 мин"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚀 Начать", callback_data="action_upscale")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+    ])
+    await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
 @dp.callback_query(F.data == "menu_download")
 async def show_download_preview(call: CallbackQuery):
     text = (
@@ -364,34 +418,211 @@ async def show_download_preview(call: CallbackQuery):
     ])
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
-@dp.callback_query(F.data == "menu_upscale")
-async def show_upscale_preview(call: CallbackQuery):
-    text = (
-        "✨ **Апскейл видео и фото (Real-ESRGAN)**\n\n"
-        "Улучшение качества ваших медиафайлов в 2 или 4 раза.\n\n"
-        "💰 Стоимость: 5 кр / фото, 20 кр / видео\n"
-        "⏳ Время: 1-5 мин (зависит от длины видео)"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Начать", callback_data="action_upscale")],
-        [InlineKeyboardButton(text="🎬 Пример", callback_data="example_upscale")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-    ])
-    await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+async def generate_voiceover(text: str, voice_id: str) -> str:
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    data = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, json=data, headers=headers) as response:
+            if response.status == 200:
+                file_path = os.path.join(DOWNLOAD_DIR, f"voice_{uuid.uuid4()}.mp3")
+                os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+                with open(file_path, "wb") as f:
+                    f.write(await response.read())
+                return file_path
+            else:
+                error_text = await response.text()
+                raise Exception(f"ElevenLabs error: {error_text}")
 
 @dp.callback_query(F.data == "menu_voice")
 async def show_voice_preview(call: CallbackQuery):
     text = (
         "🎙 **AI Озвучка**\n\n"
-        "Превращение текста в реалистичную речь. Более 100 голосов на разных языках.\n\n"
+        "Превращение текста в реалистичную речь. Мы используем лучшие нейросети для создания естественного звучания.\n\n"
         "💰 Стоимость: 10 кр / 1000 симв.\n"
-        "⏳ Время: 1 мин"
+        "⏳ Время: моментально"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Начать", callback_data="action_voice")],
+        [InlineKeyboardButton(text="🚀 Попробовать", callback_data="action_voice")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
     ])
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+@dp.callback_query(F.data == "action_voice")
+async def voice_choose_category(call: CallbackQuery, state: FSMContext):
+    await state.set_state(VoiceStates.choosing_category)
+    text = "Выбери стиль голоса для своего креатива:"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Соцсети", callback_data="voice_cat_social")],
+        [InlineKeyboardButton(text="🗣 Разговорный", callback_data="voice_cat_conversational")],
+        [InlineKeyboardButton(text="📢 Реклама", callback_data="voice_cat_advertising")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_voice")]
+    ])
+    await call.message.edit_text(text, reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("voice_cat_"))
+async def voice_list_voices(call: CallbackQuery, state: FSMContext):
+    category_id = call.data.replace("voice_cat_", "")
+    category = VOICES.get(category_id)
+    if not category:
+        return
+    
+    await state.update_data(category_id=category_id)
+    await state.set_state(VoiceStates.choosing_voice)
+    
+    text = f"Доступные голоса в категории '{category['name']}':"
+    builder = InlineKeyboardBuilder()
+    for voice in category["voices"]:
+        builder.row(InlineKeyboardButton(text=voice["name"], callback_data=f"voice_select_{voice['id']}"))
+    
+    builder.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="action_voice"))
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data.startswith("voice_select_"))
+async def voice_action_menu(call: CallbackQuery, state: FSMContext):
+    voice_id = call.data.replace("voice_select_", "")
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    category = VOICES.get(category_id)
+    
+    voice = next((v for v in category["voices"] if v["id"] == voice_id), None)
+    if not voice:
+        return
+    
+    await state.update_data(voice_id=voice_id, voice_name=voice["name"])
+    await state.set_state(VoiceStates.choosing_action)
+    
+    text = (
+        f"Голос: **{voice['name']}** ({voice['desc']})\n\n"
+        "Что хочешь сделать?"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎧 Прослушать демо", callback_data=f"voice_demo_{voice_id}")],
+        [InlineKeyboardButton(text="✅ Выбрать этот голос", callback_data="voice_confirm")],
+        [InlineKeyboardButton(text="⬅️ Назад к списку", callback_data=f"voice_cat_{category_id}")]
+    ])
+    await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+import json
+
+VOICES_DB_FILE = os.path.join(BASE_DIR, "voices_db.json")
+
+def load_voices_db():
+    if os.path.exists(VOICES_DB_FILE):
+        try:
+            with open(VOICES_DB_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_voices_db(db):
+    with open(VOICES_DB_FILE, "w", encoding="utf-8") as f:
+        json.dump(db, f, ensure_ascii=False, indent=4)
+
+voices_db = load_voices_db()
+
+@dp.message(F.audio | F.voice | F.document)
+async def handle_voice_reg(message: Message):
+    caption = message.caption or message.text
+    if caption and caption.startswith("VOICE_REG:"):
+        parts = caption.split(":")
+        if len(parts) >= 3:
+            category = parts[1].strip()
+            name = parts[2].strip()
+            
+            voice_id = None
+            for cat_key, cat_data in VOICES.items():
+                for v in cat_data["voices"]:
+                    if v["name"].lower() == name.lower():
+                        voice_id = v["id"]
+                        break
+                if voice_id:
+                    break
+            
+            if voice_id:
+                file_id = None
+                if message.audio:
+                    file_id = message.audio.file_id
+                elif message.voice:
+                    file_id = message.voice.file_id
+                elif message.document:
+                    file_id = message.document.file_id
+                
+                if file_id:
+                    voices_db[voice_id] = file_id
+                    save_voices_db(voices_db)
+                    await message.reply(f"✅ Демо для голоса '{name}' ({voice_id}) успешно сохранено!")
+            else:
+                await message.reply(f"❌ Голос с именем '{name}' не найден в словаре VOICES.")
+
+@dp.callback_query(F.data.startswith("voice_demo_"))
+async def voice_play_demo(call: CallbackQuery, state: FSMContext):
+    voice_id = call.data.replace("voice_demo_", "")
+    data = await state.get_data()
+    category_id = data.get("category_id")
+    category = VOICES.get(category_id)
+    voice = next((v for v in category["voices"] if v["id"] == voice_id), None)
+    
+    demo_file_id = voices_db.get(voice_id) or (voice.get("demo_file_id") if voice else None)
+    
+    if demo_file_id:
+        await call.message.answer_audio(demo_file_id)
+        await call.answer()
+    else:
+        await call.answer("Демо этого голоса пока недоступно.", show_alert=True)
+
+@dp.callback_query(F.data == "voice_confirm")
+async def voice_ask_text(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    voice_name = data.get("voice_name")
+    
+    await state.set_state(VoiceStates.waiting_text)
+    await call.message.edit_text(
+        f"Выбран голос: **{voice_name}**\n\n"
+        "Введите текст для озвучки (до 1000 символов):",
+        parse_mode="Markdown"
+    )
+
+@dp.message(VoiceStates.waiting_text)
+async def voice_generate(message: Message, state: FSMContext):
+    text = message.text
+    if not text:
+        await message.answer("Пожалуйста, отправьте текст.")
+        return
+    
+    if len(text) > 1000:
+        await message.answer("Текст слишком длинный. Максимум 1000 символов.")
+        return
+    
+    data = await state.get_data()
+    voice_id = data.get("voice_id")
+    
+    status_msg = await message.answer("⏳ Генерирую озвучку...")
+    
+    try:
+        file_path = await generate_voiceover(text, voice_id)
+        await message.answer_audio(FSInputFile(file_path), caption="✅ Ваша озвучка готова!")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        logging.error(f"Voiceover error: {e}")
+        await message.answer(f"❌ Произошла ошибка при генерации: {e}")
+    finally:
+        await status_msg.delete()
+        await state.clear()
 
 @dp.callback_query(F.data == "menu_subs")
 async def show_subs_preview(call: CallbackQuery):
@@ -586,6 +817,104 @@ async def handle_download_actions(call: CallbackQuery, state: FSMContext):
             await call.message.edit_text("🔁 Массовый режим выбран.")
             await call.message.answer("Сколько уникализированных копий создать? (например: 10)")
             await state.set_state(UniqueStates.waiting_count)
+
+@dp.callback_query(F.data == "action_upscale")
+async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
+    await call.message.edit_text("✨ Отправьте фото или видео для улучшения качества (апскейла):")
+    await state.set_state(UpscaleStates.waiting_file)
+
+@dp.message(StateFilter(UpscaleStates.waiting_file), F.content_type.in_({ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}))
+async def handle_upscale_file(message: Message, state: FSMContext):
+    file = None
+    is_photo = False
+    if message.photo:
+        file = message.photo[-1]
+        is_photo = True
+    elif message.video:
+        file = message.video
+    elif message.document:
+        file = message.document
+        if file.mime_type and file.mime_type.startswith('image/'):
+            is_photo = True
+            
+    if not file:
+        await message.answer("❌ Пожалуйста, отправьте фото или видео.")
+        return
+
+    ext = ".jpg" if is_photo else ".mp4"
+    if hasattr(file, 'file_name') and file.file_name:
+        ext = os.path.splitext(file.file_name)[1]
+        
+    file_name = f"upscale_in_{uuid.uuid4()}{ext}"
+    input_path = os.path.join(DOWNLOAD_DIR, file_name)
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    
+    try:
+        await download_video(file, input_path)
+    except TelegramBadRequest as e:
+        if "file is too big" in str(e).lower() or "file_id" in str(e).lower():
+            meta = {
+                "user_id": message.from_user.id,
+                "mode": "upscale",
+                "file_unique_id": file.file_unique_id
+            }
+            try:
+                await bot.send_message(USERBOT_ID, json.dumps(meta))
+                await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
+                await message.answer("⏳ Файл большой. Скачиваю через UserBot, это займет немного времени...")
+            except Exception as send_e:
+                await message.answer(f"❌ Ошибка отправки на обработку. Попробуйте позже.\nПодробности: {send_e}")
+            await state.clear()
+            return
+        else:
+            await message.answer(f"❌ Ошибка скачивания: {e}")
+            await state.clear()
+            return
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при скачивании: {e}")
+        await state.clear()
+        return
+    
+    progress_msg = await message.answer("⚙️ Подготовка файла...")
+    
+    async def update_progress(percent, text_status):
+        filled = int(10 * percent / 100)
+        bar = f"[{'▒' * filled}{'░' * (10 - filled)}]"
+        msg_text = f"⚙️ {text_status}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n{bar} {percent}%\n⏳ Пожалуйста, подождите..."
+        try:
+            await progress_msg.edit_text(msg_text)
+        except Exception:
+            pass
+
+    try:
+        output_path = await process_heavy_task(
+            file_path=input_path,
+            task_name="upscale",
+            progress_callback=update_progress,
+            is_image=is_image
+        )
+        
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+            
+        if is_photo:
+            await message.answer_photo(FSInputFile(output_path), caption="✅ Апскейл завершен!")
+            safe_to_delete = True
+        else:
+            safe_to_delete = await send_file_safely(message, output_path, caption="✅ Апскейл завершен!")
+        
+        if os.path.exists(input_path): os.remove(input_path)
+        if safe_to_delete and os.path.exists(output_path): os.remove(output_path)
+    except Exception as e:
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
+        await message.answer(f"❌ Ошибка при апскейле. Попробуйте позже.\nПодробности: {e}")
+    finally:
+        await state.clear()
 
 @dp.callback_query(F.data == "action_watermark")
 async def open_watermark_menu(call: CallbackQuery, state: FSMContext):
@@ -894,92 +1223,6 @@ async def handle_split_user_video(message: Message, state: FSMContext):
     finally:
         await state.clear()
 
-@dp.callback_query(F.data == "action_upscale")
-async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("🪄 Отправьте ФОТО или ВИДЕО, качество которого нужно улучшить (Апскейл):")
-    await state.set_state(UpscaleStates.waiting_media)
-
-# from new_modules.upscale import upscale_media_sync
-
-@dp.message(StateFilter(UpscaleStates.waiting_media), F.content_type.in_({ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}))
-async def handle_upscale_media(message: Message, state: FSMContext):
-    file = message.photo[-1] if message.photo else (message.video if message.video else message.document)
-    
-    # Check size for direct download
-    if getattr(file, 'file_size', 0) > 50 * 1024 * 1024:
-        # If it's a photo, it's usually small, but if it's a video/document, it might be large
-        if message.video or message.document:
-            meta = {
-                "user_id": message.from_user.id,
-                "mode": "upscale",
-                "file_unique_id": file.file_unique_id
-            }
-            try:
-                # Send meta first
-                await bot.send_message(USERBOT_ID, json.dumps(meta))
-                # Then forward the message
-                await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
-                await message.answer("⏳ Файл большой. Скачиваю через UserBot, это займет немного времени...")
-            except Exception as send_e:
-                await message.answer(f"❌ Ошибка отправки на обработку. Попробуйте позже.\nПодробности: {send_e}")
-            await state.clear()
-            return
-        else:
-            await message.answer("❌ Файл слишком большой. Максимальный размер 50 МБ.")
-            return
-        
-    ext = ".jpg" if message.photo else (".mp4" if message.video else os.path.splitext(file.file_name)[1])
-    file_name = f"upscale_{uuid.uuid4()}{ext}"
-    input_path = os.path.join(DOWNLOAD_DIR, file_name)
-    output_path = os.path.join(DOWNLOAD_DIR, f"upscaled_{file_name}")
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    
-    progress_msg = await message.answer("⏳ Скачивание файла...")
-    try:
-        await bot.download(file.file_id, destination=input_path)
-    except Exception as e:
-        await message.answer(f"❌ Ошибка скачивания: {e}")
-        await state.clear()
-        return
-    
-    await progress_msg.edit_text("⚙️ Обработка файла (Real-ESRGAN)...\nЭто может занять несколько минут, особенно для видео. Пожалуйста, подождите.")
-    
-    async def update_progress(percent, status_text="Обработка файла..."):
-        filled = int(10 * percent / 100)
-        bar = f"[{'▒' * filled}{'░' * (10 - filled)}]"
-        msg_text = f"⚙️ {status_text}\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n{bar} {percent}%\n⏳ Пожалуйста, подождите..."
-        try:
-            await progress_msg.edit_text(msg_text)
-        except Exception:
-            pass
-
-    try:
-        # Process via RunPod
-        output_path = await process_heavy_task(
-            file_path=input_path,
-            task_name="upscale",
-            progress_callback=lambda p, m: update_progress(p, m)
-        )
-        
-        await progress_msg.edit_text("✅ Обработка завершена! Отправляю файл...")
-        
-        if ext.lower() in ['.mp4', '.mov', '.avi', '.mkv', '.webm']:
-            await message.answer_video(FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
-        else:
-            await message.answer_photo(FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
-            
-    except Exception as e:
-        logging.error(f"Error in upscale: {e}")
-        await message.answer(f"❌ Произошла ошибка при обработке: {e}")
-    finally:
-        try:
-            await progress_msg.delete()
-        except Exception:
-            pass
-        if os.path.exists(input_path): os.remove(input_path)
-        if os.path.exists(output_path): os.remove(output_path)
-        await state.clear()
-
 @dp.callback_query(F.data == "menu_profile")
 async def show_profile(call: CallbackQuery):
     user_id = call.from_user.id
@@ -1167,11 +1410,85 @@ async def handle_subs_video(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "action_translate")
 async def open_translate_menu(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text("🌍 Отправьте видео для перевода и дубляжа:")
+    await state.set_state(TranslateStates.waiting_language)
+    text = "🌍 Выберите язык, на который нужно перевести видео:"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🇷🇺 Русский", callback_data="trans_lang_ru"), InlineKeyboardButton(text="🇬🇧 English", callback_data="trans_lang_en")],
+        [InlineKeyboardButton(text="🇪🇸 Spanish", callback_data="trans_lang_es"), InlineKeyboardButton(text="🇧🇷 Portuguese", callback_data="trans_lang_pt")],
+        [InlineKeyboardButton(text="🇫🇷 French", callback_data="trans_lang_fr"), InlineKeyboardButton(text="🇩🇪 German", callback_data="trans_lang_de")],
+        [InlineKeyboardButton(text="🇹🇷 Turkish", callback_data="trans_lang_tr"), InlineKeyboardButton(text="🇦🇪 Arabic", callback_data="trans_lang_ar")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_translate")]
+    ])
+    await call.message.edit_text(text, reply_markup=keyboard)
+
+@dp.callback_query(F.data.startswith("trans_lang_"))
+async def translate_language_selected(call: CallbackQuery, state: FSMContext):
+    lang_code = call.data.replace("trans_lang_", "")
+    await state.update_data(target_lang=lang_code)
     await state.set_state(TranslateStates.waiting_video)
+    await call.message.edit_text("🎥 Отправьте видео для перевода и дубляжа:")
+
+async def dub_video_elevenlabs(file_path: str, target_lang: str, progress_callback=None) -> str:
+    url = "https://api.elevenlabs.io/v1/dubbing"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY
+    }
+    
+    data = aiohttp.FormData()
+    data.add_field('file', open(file_path, 'rb'), filename=os.path.basename(file_path))
+    data.add_field('target_lang', target_lang)
+    data.add_field('mode', 'automatic')
+    data.add_field('num_speakers', '0')
+    data.add_field('watermark', 'false')
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=data) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                raise Exception(f"ElevenLabs API error: {error_text}")
+            result = await response.json()
+            dubbing_id = result.get("dubbing_id")
+            
+        status_url = f"https://api.elevenlabs.io/v1/dubbing/{dubbing_id}"
+        progress = 10
+        while True:
+            await asyncio.sleep(5)
+            async with session.get(status_url, headers=headers) as status_response:
+                if status_response.status != 200:
+                    continue
+                status_data = await status_response.json()
+                status = status_data.get("status")
+                if status == "dubbed":
+                    break
+                elif status == "failed":
+                    raise Exception("ElevenLabs dubbing failed.")
+                
+                if progress_callback:
+                    progress += random.randint(2, 5)
+                    if progress > 95:
+                        progress = 95
+                    await progress_callback(progress, "Нейросеть переводит видео...")
+
+        download_url = f"https://api.elevenlabs.io/v1/dubbing/{dubbing_id}/audio/{target_lang}"
+        async with session.get(download_url, headers=headers) as download_response:
+            if download_response.status != 200:
+                error_text = await download_response.text()
+                raise Exception(f"ElevenLabs download error: {error_text}")
+            
+            output_path = os.path.join(DOWNLOAD_DIR, f"dubbed_{uuid.uuid4()}.mp4")
+            with open(output_path, "wb") as f:
+                while True:
+                    chunk = await download_response.content.read(8192)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            return output_path
 
 @dp.message(StateFilter(TranslateStates.waiting_video), F.content_type.in_({ContentType.VIDEO, ContentType.DOCUMENT}))
 async def handle_translate_video(message: Message, state: FSMContext):
+    data = await state.get_data()
+    target_lang = data.get("target_lang", "en")
+    
     file = message.video or message.document
     file_name = file.file_name or f"{uuid.uuid4()}.mp4"
     input_path = os.path.join(DOWNLOAD_DIR, f"trans_{file_name}")
@@ -1183,13 +1500,11 @@ async def handle_translate_video(message: Message, state: FSMContext):
         if "file is too big" in str(e).lower() or "file_id" in str(e).lower():
             meta = {
                 "user_id": message.from_user.id,
-                "mode": "ai_translate",
+                "mode": f"ai_translate_{target_lang}",
                 "file_unique_id": file.file_unique_id
             }
             try:
-                # Send meta first
                 await bot.send_message(USERBOT_ID, json.dumps(meta))
-                # Then forward the message
                 await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
                 await message.answer("⏳ Видео большое. Скачиваю через UserBot, это займет немного времени...")
             except Exception as send_e:
@@ -1217,9 +1532,10 @@ async def handle_translate_video(message: Message, state: FSMContext):
             pass
 
     try:
-        output_path = await process_heavy_task(
+        await update_progress(5, "Загрузка видео в ElevenLabs...")
+        output_path = await dub_video_elevenlabs(
             file_path=input_path,
-            task_name="ai_translate",
+            target_lang=target_lang,
             progress_callback=update_progress
         )
         
@@ -1533,10 +1849,12 @@ async def polling_sqlite():
                                     pass
                                     
                             try:
+                                is_image = input_path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
                                 output_path = await process_heavy_task(
                                     file_path=input_path,
                                     task_name="upscale",
-                                    progress_callback=update_progress
+                                    progress_callback=update_progress,
+                                    is_image=is_image
                                 )
                                 
                                 try:
@@ -1556,7 +1874,10 @@ async def polling_sqlite():
                                         width, height = get_video_dimensions(probe)
                                     except Exception:
                                         pass
-                                    await bot.send_video(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!", width=width, height=height)
+                                    if output_path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                                        await bot.send_photo(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
+                                    else:
+                                        await bot.send_video(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!", width=width, height=height)
                                     if os.path.exists(output_path):
                                         os.remove(output_path)
                                         
@@ -1629,8 +1950,9 @@ async def polling_sqlite():
                         await sqlite_db.delete_task(task_id)
                         continue
 
-                    elif mode == "ai_translate":
-                        async def process_translate_bg(user_id, input_path):
+                    elif mode.startswith("ai_translate_"):
+                        target_lang = mode.replace("ai_translate_", "")
+                        async def process_translate_bg(user_id, input_path, target_lang):
                             progress_msg = await bot.send_message(user_id, "⚙️ Подготовка видео (перевод)...")
                             
                             async def update_progress(percent, text_status):
@@ -1643,9 +1965,10 @@ async def polling_sqlite():
                                     pass
                                     
                             try:
-                                output_path = await process_heavy_task(
+                                await update_progress(5, "Загрузка видео в ElevenLabs...")
+                                output_path = await dub_video_elevenlabs(
                                     file_path=input_path,
-                                    task_name="ai_translate",
+                                    target_lang=target_lang,
                                     progress_callback=update_progress
                                 )
                                 
@@ -1679,7 +2002,7 @@ async def polling_sqlite():
                                     pass
                                 await bot.send_message(user_id, f"❌ Ошибка при переводе видео. Попробуйте позже.\nПодробности: {e}")
                                 
-                        asyncio.create_task(process_translate_bg(user_id, path))
+                        asyncio.create_task(process_translate_bg(user_id, path, target_lang))
                         await sqlite_db.delete_task(task_id)
                         continue
 
@@ -2111,7 +2434,7 @@ async def handle_userbot_forward(message: Message):
 
 if __name__ == "__main__":
     # Safety check: do not run the bot on RunPod
-    if os.getenv("RUNPOD_POD_ID") or os.getenv("RUNPOD_ENDPOINT_ID"):
+    if os.getenv("RUNPOD_POD_ID"):
         logging.error("[MainBot] ⚠️ Detected RunPod environment. Bot will not start here.")
         sys.exit(0)
 

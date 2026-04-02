@@ -46,8 +46,14 @@ API_HASH = os.getenv("TELEGRAM_API_HASH")
 MAIN_BOT_ID = int(os.getenv("MAIN_BOT_ID", "0"))
 USERBOT_ID = os.getenv("USERBOT_ID", "userbot")
 
-# Определяем имя сессии: если есть USERBOT_ID, используем его, иначе дефолтное "userbot"
-SESSION_NAME = os.path.join(BASE_DIR, "sessions", USERBOT_ID)
+# Определяем имя сессии: приоритет отдаем "userbot", если такой файл существует
+# Если нет — используем USERBOT_ID
+if os.path.exists(os.path.join(BASE_DIR, "sessions", "userbot.session")):
+    logging.info("[UserBot] Найдена сессия userbot.session, использую её.")
+    SESSION_NAME = os.path.join(BASE_DIR, "sessions", "userbot")
+else:
+    SESSION_NAME = os.path.join(BASE_DIR, "sessions", USERBOT_ID)
+    logging.info(f"[UserBot] Использую ID-зависимую сессию: {USERBOT_ID}.session")
 
 def fix_session_database(session_path):
     """Исправляет ошибки структуры для старых сессий Pyrogram (number, test_mode, user_id, is_bot)"""
@@ -209,7 +215,7 @@ async def process_video(app: Client, video_msg: Message, meta: dict):
 
             await mark_ready(user_id=user_id, path=unique_path, mode="single")
 
-        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode == "ai_translate" or mode == "watermark" or mode == "upscale":
+        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode.startswith("ai_translate_") or mode == "watermark" or mode == "upscale":
             await video_msg.reply(f"✅ Видео скачано для {mode}. Передаю боту...")
             await mark_ready(user_id=user_id, path=video_path, mode=mode)
 
@@ -317,6 +323,20 @@ async def on_video(client, message: Message):
     logging.info(f"[UserBot] on_video: Calling process_video for file_unique_id={file_unique_id}")
     await process_video(client, message, meta)
 
+
+@app.on_message(filters.command("scan_voices", prefixes=".") & filters.me)
+async def scan_voices_command(client: Client, message: Message):
+    await message.edit_text("⏳ Сканирую чат на наличие демо-голосов...")
+    chat_id = message.chat.id
+    count = 0
+    async for msg in client.get_chat_history(chat_id, limit=500):
+        caption = msg.caption or msg.text
+        if caption and caption.startswith("VOICE_REG:"):
+            if msg.audio or msg.voice or msg.document:
+                await msg.forward(MAIN_BOT_ID)
+                count += 1
+                await asyncio.sleep(0.5)
+    await message.edit_text(f"✅ Сканирование завершено. Переслано {count} демо-записей главному боту.")
 
 @app.on_message(filters.private & filters.text)
 async def on_meta(client, message: Message):
@@ -426,7 +446,7 @@ def main():
 
 if __name__ == "__main__":
     # Safety check: do not run the userbot on RunPod
-    if os.getenv("RUNPOD_POD_ID") or os.getenv("RUNPOD_ENDPOINT_ID"):
+    if os.getenv("RUNPOD_POD_ID"):
         logging.error("[UserBot] ⚠️ Detected RunPod environment. UserBot will not start here.")
         sys.exit(0)
     main()

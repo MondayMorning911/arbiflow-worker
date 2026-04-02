@@ -245,16 +245,18 @@ def handler(job):
                 raise Exception("FFmpeg failed")
                 
         elif task == "upscale":
-            send_debug("✨ Апскейл видео/фото (Real-ESRGAN)...")
+            send_debug("✨ Апскейл видео/фото (4x-UltraSharp)...")
             try:
                 import cv2
                 from basicsr.archs.rrdbnet_arch import RRDBNet
                 from realesrgan import RealESRGANer
                 
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                # Real-ESRGAN x4plus model
+                # 4x-UltraSharp is an RRDBNet model
                 model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-                model_path = '/app/weights/RealESRGAN_x4plus.pth'
+                model_path = '/runpod-volume/4x-UltraSharp.pth'
+                if not os.path.exists(model_path):
+                    model_path = '/runpod-volume/4x-UltraSharp.safetensors'
                 
                 upscaler = RealESRGANer(
                     scale=4,
@@ -268,19 +270,10 @@ def handler(job):
                     device=device
                 )
                 
-                # We use outscale=2 or 4. Let's use 2 for better speed/quality balance, or 4 for max quality.
-                # User asked "точно поднимает качество", so let's use 4.
                 scale_factor = 4
                 
                 # Check if it's an image or video
-                is_image = False
-                try:
-                    probe = ffmpeg.probe(input_video)
-                    if not any(s['codec_type'] == 'video' for s in probe['streams']):
-                        is_image = True
-                except:
-                    if input_video.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                        is_image = True
+                is_image = job_input.get("is_image", False)
                 
                 if is_image:
                     send_debug("🖼 Обработка изображения...")
@@ -298,7 +291,7 @@ def handler(job):
                     out_width = int(width * scale_factor)
                     out_height = int(height * scale_factor)
                     
-                    temp_video_path = output_video + "_temp.mp4"
+                    temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
                     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                     out = cv2.VideoWriter(temp_video_path, fourcc, fps, (out_width, out_height))
                     
@@ -322,7 +315,7 @@ def handler(job):
                         if os.path.exists(temp_video_path): os.remove(temp_video_path)
                 
             except Exception as e:
-                send_debug(f"⚠️ Ошибка RealESRGAN: {e}. Использую Lanczos...")
+                send_debug(f"⚠️ Ошибка апскейла: {e}. Использую Lanczos...")
                 (
                     ffmpeg
                     .input(input_video)
@@ -387,6 +380,10 @@ def handler(job):
         try:
             ass_file = os.path.join(TEMP_PATH, f"subs_{job_id}.ass")
             if os.path.exists(ass_file): os.remove(ass_file)
+        except: pass
+        try:
+            temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
+            if os.path.exists(temp_video_path): os.remove(temp_video_path)
         except: pass
 
 if __name__ == "__main__":
