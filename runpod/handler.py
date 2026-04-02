@@ -254,9 +254,9 @@ def handler(job):
                 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
                 # 4x-UltraSharp is an RRDBNet model
                 model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-                model_path = '/runpod-volume/4x-UltraSharp.pth'
+                model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
                 if not os.path.exists(model_path):
-                    model_path = '/runpod-volume/4x-UltraSharp.safetensors'
+                    model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
                 
                 upscaler = RealESRGANer(
                     scale=4,
