@@ -33,7 +33,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Bot Image
+      - name: Build and push RunPod Worker Image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -42,13 +42,3 @@ jobs:
           tags: sodot1/arbiflow:latest
           cache-from: type=registry,ref=sodot1/arbiflow:buildcache
           cache-to: type=registry,ref=sodot1/arbiflow:buildcache,mode=max
-
-      - name: Build and push RunPod Worker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./runpod
-          file: ./runpod/Dockerfile
-          push: true
-          tags: sodot1/arbiflow-worker:latest
-          cache-from: type=registry,ref=sodot1/arbiflow-worker:buildcache
-          cache-to: type=registry,ref=sodot1/arbiflow-worker:buildcache,mode=max

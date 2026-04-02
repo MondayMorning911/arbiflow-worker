@@ -1,18 +1,38 @@
 import os
-import uuid
-import requests
-import runpod
-import torch
-import ffmpeg
-import traceback
-import shutil
 import sys
-from dotenv import load_dotenv
+
+# --- EARLY LOGGING ---
+print("🚀 [ArbiFlow Worker]: Starting initialization...", flush=True)
+
+try:
+    import uuid
+    import requests
+    import runpod
+    import torch
+    import ffmpeg
+    import traceback
+    import shutil
+    from dotenv import load_dotenv
+    print("✅ [ArbiFlow Worker]: Core modules imported.", flush=True)
+except Exception as e:
+    print(f"❌ [ArbiFlow Worker]: FAILED TO IMPORT CORE MODULES: {e}", file=sys.stderr, flush=True)
+    sys.exit(1)
 
 # --- CONFIGURATION ---
 VOLUME_PATH = "/runpod-volume"
 MODEL_PATH = os.path.join(VOLUME_PATH, "models")
 TEMP_PATH = "/tmp/arbiflow"
+
+# Пытаемся найти шрифт
+BASE_DIR = os.getcwd()
+FONT_PATH = os.path.join(BASE_DIR, "runpod", "SoyuzGroteskBold.ttf")
+if not os.path.exists(FONT_PATH):
+    FONT_PATH = os.path.join(BASE_DIR, "SoyuzGroteskBold.ttf")
+    if not os.path.exists(FONT_PATH):
+        FONT_PATH = "/app/runpod/SoyuzGroteskBold.ttf"
+
+FONT_DIR = os.path.dirname(FONT_PATH)
+print(f"📍 [ArbiFlow Worker]: Font path: {FONT_PATH}", flush=True)
 
 # Глобальные переменные для моделей (ленивая загрузка)
 whisper_model = None
@@ -161,14 +181,9 @@ def handler(job):
 
             generate_ass_subtitles(list(segments), ass_file, position=position, width=width, height=height)
 
-            # Find font
-            font_dir = "/app/fonts"
-            if not os.path.exists(font_dir):
-                font_dir = os.path.join(os.getcwd(), "fonts")
-
             ffmpeg.input(input_video).output(
                 output_video, 
-                vf=f"subtitles='{ass_file}':fontsdir={font_dir}", 
+                vf=f"subtitles='{ass_file}':fontsdir='{FONT_DIR}'", 
                 vcodec='libx264', acodec='copy', preset='ultrafast', crf=23
             ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                 
@@ -247,4 +262,5 @@ def handler(job):
                 except: pass
 
 if __name__ == "__main__":
+    print("🚀 [ArbiFlow Worker]: Initialization complete. Starting RunPod serverless...", flush=True)
     runpod.serverless.start({"handler": handler})
