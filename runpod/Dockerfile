@@ -12,13 +12,8 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Установка Python-зависимостей
-WORKDIR /app
 COPY requirements.txt .
-
-# ❗ ПРИНУДИТЕЛЬНО УДАЛЯЕМ conda numpy и ставим версию 1.x
-RUN conda remove -y numpy && \
-    pip install --no-cache-dir "numpy==1.26.4" && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Скачивание весов нейросетей (Real-ESRGAN и GFPGAN)
 RUN mkdir -p /app/weights && \

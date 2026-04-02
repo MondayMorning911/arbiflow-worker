@@ -2,13 +2,12 @@ import os
 import uuid
 import requests
 import runpod
+import torch
+import ffmpeg
 import traceback
 import shutil
 import sys
 from dotenv import load_dotenv
-
-# Загружаем переменные окружения
-load_dotenv()
 
 # --- CONFIGURATION ---
 VOLUME_PATH = "/runpod-volume"
@@ -21,14 +20,9 @@ whisper_model = None
 def get_whisper_model():
     global whisper_model
     if whisper_model is None:
-        # Импортируем тяжелые библиотеки только здесь
-        import torch
         from faster_whisper import WhisperModel
-        
         device = "cuda" if torch.cuda.is_available() else "cpu"
         compute_type = "float16" if torch.cuda.is_available() else "int8"
-        
-        print(f"DEBUG: Loading Whisper on {device} with {compute_type}")
         whisper_model = WhisperModel(
             "large-v3", 
             device=device, 
@@ -61,6 +55,7 @@ def upload_to_catbox(file_path):
             pass
         time.sleep(2)
         
+    # Fallback to 0x0.st
     try:
         url = "https://0x0.st"
         with open(file_path, 'rb') as f:
@@ -119,25 +114,22 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write("\n".join(lines))
 
 def handler(job):
-    # Импортируем библиотеки только внутри обработчика
-    import ffmpeg
-    import torch
-    
     job_id = job.get("id")
     job_input = job.get("input", {})
-    print(f"DEBUG: Job {job_id} started with input: {job_input}")
-    
     task = job_input.get("task")
     video_url = job_input.get("video_url")
     
     if not video_url or not task:
-        return {"status": "error", "message": f"Missing video_url or task. Input keys: {list(job_input.keys())}"}
+        return {"status": "error", "message": "Missing video_url or task"}
 
+    # Setup paths
     os.makedirs(TEMP_PATH, exist_ok=True)
     os.makedirs(MODEL_PATH, exist_ok=True)
     
     input_video = os.path.join(TEMP_PATH, f"in_{job_id}.mp4")
     output_video = os.path.join(TEMP_PATH, f"out_{job_id}.mp4")
+    
+    # Files for cleanup
     cleanup_list = [input_video, output_video]
     
     try:
@@ -169,6 +161,7 @@ def handler(job):
 
             generate_ass_subtitles(list(segments), ass_file, position=position, width=width, height=height)
 
+            # Find font
             font_dir = "/app/fonts"
             if not os.path.exists(font_dir):
                 font_dir = os.path.join(os.getcwd(), "fonts")
@@ -180,46 +173,55 @@ def handler(job):
             ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                 
         elif task == "upscale":
-            import cv2
-            from basicsr.archs.rrdbnet_arch import RRDBNet
-            from realesrgan import RealESRGANer
-            
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            rrdb_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-            model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
-            if not os.path.exists(model_path):
-                model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
-            
-            upscaler = RealESRGANer(
-                scale=4, model_path=model_path, model=rrdb_model, 
-                tile=0, tile_pad=10, pre_pad=0, half=True, device=device
-            )
-            
-            if is_image:
-                img = cv2.imread(input_video, cv2.IMREAD_COLOR)
-                output, _ = upscaler.enhance(img, outscale=4)
-                cv2.imwrite(output_video, output)
-            else:
-                cap = cv2.VideoCapture(input_video)
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            try:
+                import cv2
+                from basicsr.archs.rrdbnet_arch import RRDBNet
+                from realesrgan import RealESRGANer
                 
-                temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
-                cleanup_list.append(temp_video_path)
-                out = cv2.VideoWriter(temp_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width*4, height*4))
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                rrdb_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+                model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
+                if not os.path.exists(model_path):
+                    model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
                 
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret: break
-                    enhanced_frame, _ = upscaler.enhance(frame, outscale=4)
-                    out.write(enhanced_frame)
-                cap.release()
-                out.release()
+                upscaler = RealESRGANer(
+                    scale=4, model_path=model_path, model=rrdb_model, 
+                    tile=0, tile_pad=10, pre_pad=0, half=True, device=device
+                )
                 
-                try:
-                    ffmpeg.output(ffmpeg.input(temp_video_path).video, ffmpeg.input(input_video).audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, quiet=True)
-                except:
-                    shutil.copy(temp_video_path, output_video)
+                if is_image:
+                    img = cv2.imread(input_video, cv2.IMREAD_COLOR)
+                    output, _ = upscaler.enhance(img, outscale=4)
+                    cv2.imwrite(output_video, output)
+                else:
+                    cap = cv2.VideoCapture(input_video)
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    
+                    temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
+                    cleanup_list.append(temp_video_path)
+                    out = cv2.VideoWriter(temp_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width*4, height*4))
+                    
+                    while cap.isOpened():
+                        ret, frame = cap.read()
+                        if not ret: break
+                        enhanced_frame, _ = upscaler.enhance(frame, outscale=4)
+                        out.write(enhanced_frame)
+                    cap.release()
+                    out.release()
+                    
+                    try:
+                        ffmpeg.output(ffmpeg.input(temp_video_path).video, ffmpeg.input(input_video).audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, quiet=True)
+                    except:
+                        shutil.copy(temp_video_path, output_video)
+                
+            except Exception as e:
+                # Fallback to Lanczos
+                vf = "scale=iw*4:ih*4:flags=lanczos"
+                if is_image:
+                    ffmpeg.input(input_video).output(output_video, vf=vf).run(overwrite_output=True, quiet=True)
+                else:
+                    ffmpeg.input(input_video).output(output_video, vf=vf, vcodec='libx264', acodec='copy').run(overwrite_output=True, quiet=True)
 
         elif task == "ai_voice":
             voice_text = job_input.get("voice_text")
