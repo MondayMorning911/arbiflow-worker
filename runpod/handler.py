@@ -196,6 +196,13 @@ def handler(job):
     try:
         download_file(video_url, input_video)
         
+        is_image = job_input.get("is_image", False)
+        if is_image:
+            new_input = input_video.replace('.mp4', '.jpg')
+            os.rename(input_video, new_input)
+            input_video = new_input
+            output_video = output_video.replace('.mp4', '.jpg')
+            
         if task == "ai_subs":
             position = job_input.get("position", "bottom")
             ass_file = os.path.join(TEMP_PATH, f"subs_{job_id}.ass")
@@ -272,23 +279,15 @@ def handler(job):
                 
                 scale_factor = 4
                 
-                # Check if it's an image or video
-                is_image = job_input.get("is_image", False)
-                if not is_image:
-                    try:
-                        probe = ffmpeg.probe(input_video)
-                        if not any(s['codec_type'] == 'video' for s in probe['streams']):
-                            is_image = True
-                    except:
-                        if input_video.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                            is_image = True
-                
                 if is_image:
                     send_debug("🖼 Обработка изображения...")
                     img = cv2.imread(input_video, cv2.IMREAD_COLOR)
+                    if img is None:
+                        raise Exception(f"cv2.imread failed to read {input_video}")
                     output, _ = upscaler.enhance(img, outscale=scale_factor)
-                    output_video = output_video.replace('.mp4', '.jpg')
-                    cv2.imwrite(output_video, output)
+                    success = cv2.imwrite(output_video, output)
+                    if not success:
+                        raise Exception(f"Failed to write image to {output_video}")
                 else:
                     send_debug("🎥 Обработка видео...")
                     cap = cv2.VideoCapture(input_video)
@@ -326,20 +325,22 @@ def handler(job):
                 send_debug(f"⚠️ Ошибка апскейла: {e}. Использую Lanczos...")
                 try:
                     if is_image:
-                        output_video = output_video.replace('.mp4', '.jpg')
                         (
                             ffmpeg
                             .input(input_video)
                             .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos")
-                            .run(overwrite_output=True, quiet=True)
+                            .run(overwrite_output=True, quiet=True, capture_stderr=True)
                         )
                     else:
                         (
                             ffmpeg
                             .input(input_video)
                             .output(output_video, vf="scale=iw*4:ih*4:flags=lanczos", vcodec='libx264', acodec='copy')
-                            .run(overwrite_output=True, quiet=True)
+                            .run(overwrite_output=True, quiet=True, capture_stderr=True)
                         )
+                except ffmpeg.Error as fallback_e:
+                    stderr = fallback_e.stderr.decode() if fallback_e.stderr else "No stderr"
+                    raise Exception(f"Fallback failed: {fallback_e}, stderr: {stderr}")
                 except Exception as fallback_e:
                     raise Exception(f"Fallback failed: {fallback_e}")
         elif task == "ai_voice":

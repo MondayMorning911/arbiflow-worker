@@ -148,12 +148,16 @@ async def process_heavy_task(file_path: str, task_name: str, progress_callback=N
                     msg = f"Обработка на GPU ({status})..."
                 await progress_callback(fake_prog, msg)
         elif status == "COMPLETED":
+            output = status_data.get("output", {})
+            if output.get("status") == "error":
+                error_msg = output.get("message", "Unknown error in worker")
+                raise Exception(f"Worker Error: {error_msg}")
+                
             if progress_callback:
                 await progress_callback(95, "Скачивание результата...")
-            output = status_data.get("output", {})
             result_url = output.get("result_url") or output.get("video_url") or output.get("url")
             if not result_url:
-                raise Exception("RunPod completed but no result_url provided.")
+                raise Exception(f"RunPod completed but no result_url provided. Output: {output}")
             
             ext = result_url.split('.')[-1]
             if len(ext) > 4: ext = "mp4"
