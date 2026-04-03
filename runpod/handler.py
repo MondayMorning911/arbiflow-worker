@@ -244,24 +244,32 @@ def handler(job):
         elif task == "ai_shorts":
             print(f"🎬 [ArbiFlow Worker]: Starting AI-Shorts task for {video_url}", flush=True)
             
-            # Try to find the Gemini API key
-            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            # 1. Пытаемся найти ключ Gemini разными способами
+            gemini_api_key = job_input.get("gemini_api_key") # Способ 1: Из входа задачи
             
-            # Fallback: search for similar names if not found exactly
             if not gemini_api_key:
-                print("❓ [ArbiFlow Worker]: GEMINI_API_KEY not found directly. Searching for similar keys...", flush=True)
-                for key in os.environ:
-                    if "GEMINI" in key.upper() and "KEY" in key.upper():
-                        gemini_api_key = os.environ[key]
-                        print(f"💡 [ArbiFlow Worker]: Found potential key in environment variable: {key}", flush=True)
+                gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") # Способ 2: Стандартные переменные
+            
+            # Способ 3: ХАРДКОД (по просьбе пользователя, если env не работают)
+            if not gemini_api_key:
+                gemini_api_key = "AIzaSyAln9UCaTjxZxcmyuY-kb89EbzLz-6ObAA"
+                print("⚠️ [ArbiFlow Worker]: Using hardcoded Gemini API Key.", flush=True)
+            
+            if not gemini_api_key:
+                # Способ 4: Ищем любой ключ, похожий на Google API Key (начинается на AIza)
+                print("❓ [ArbiFlow Worker]: GEMINI_API_KEY not found. Scanning all env vars for AIza pattern...", flush=True)
+                for key, value in os.environ.items():
+                    if value.startswith("AIzaSy"):
+                        gemini_api_key = value
+                        print(f"💡 [ArbiFlow Worker]: Found potential Gemini key in variable: {key}", flush=True)
                         break
             
             if not gemini_api_key:
-                print(f"❌ [ArbiFlow Worker]: GEMINI_API_KEY NOT FOUND!", flush=True)
+                print(f"❌ [ArbiFlow Worker]: NO API KEY FOUND ANYWHERE!", flush=True)
                 print(f"📍 [ArbiFlow Worker]: Available env vars: {list(os.environ.keys())}", flush=True)
-                raise Exception("GEMINI_API_KEY is not set in RunPod Environment Variables. Please check your Endpoint configuration.")
+                raise Exception("GEMINI_API_KEY is missing. Please add it to RunPod Environment Variables or pass it in the job input.")
             
-            print(f"🔑 [ArbiFlow Worker]: API Key found (starts with: {gemini_api_key[:4]}...)")
+            print(f"🔑 [ArbiFlow Worker]: API Key initialized (starts with: {gemini_api_key[:4]}...)")
             
             is_url = job_input.get("is_url", False)
             
