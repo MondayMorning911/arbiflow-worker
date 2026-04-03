@@ -11,13 +11,15 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Установка Python-зависимостей
-WORKDIR /app
+# Копируем зависимости
 COPY requirements.txt .
 
-# ❗ ПРИНУДИТЕЛЬНО УДАЛЯЕМ conda numpy и ставим версию 1.x
-RUN conda remove -y numpy && \
-    pip install --no-cache-dir "numpy==1.26.4" && \
+# Установка Python-зависимостей
+# 1. Обновляем pip
+# 2. Устанавливаем mkl для исправления ошибки iJIT_NotifyEvent
+# 3. Устанавливаем остальные зависимости
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir mkl mkl-service && \
     pip install --no-cache-dir -r requirements.txt
 
 # Копируем все файлы проекта
@@ -27,5 +29,4 @@ COPY . .
 RUN mkdir -p downloads sessions /tmp/arbiflow
 
 # На RunPod должен запускаться только обработчик (worker)
-# Основной бот (bot.py) будет запущен пользователем локально на его машине (Mac)
 CMD ["python", "runpod/handler.py"]
