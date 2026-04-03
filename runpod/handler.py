@@ -187,91 +187,109 @@ def handler(job):
                 vcodec='libx264', acodec='copy', preset='ultrafast', crf=23
             ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                 
-        elif task == "upscale":
-            try:
-                import cv2
-                from basicsr.archs.rrdbnet_arch import RRDBNet
-                from realesrgan import RealESRGANer
-                from gfpgan import GFPGANer
+        elif task == "ai_shorts":
+            import yt_dlp
+            import zipfile
+            from google import genai
+            from google.genai import types
+            import json
+            import cv2
+            
+            is_url = job_input.get("is_url", False)
+            
+            # 1. Download if URL
+            if is_url:
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': input_video,
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([video_url])
+            
+            # 2. Transcribe
+            model_instance = get_whisper_model()
+            segments, info = model_instance.transcribe(input_video, beam_size=5, word_timestamps=True, vad_filter=True)
+            
+            transcript = ""
+            for segment in segments:
+                transcript += f"[{format_timestamp(segment.start)} - {format_timestamp(segment.end)}] {segment.text}\n"
                 
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                rrdb_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+            # 3. Analyze with Gemini
+            gemini_api_key = os.environ.get("GEMINI_API_KEY")
+            if not gemini_api_key:
+                raise Exception("GEMINI_API_KEY is not set")
                 
-                model_path = '/app/weights/RealESRGAN_x4plus.pth'
-                if not os.path.exists(model_path):
-                    model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.pth'
-                if not os.path.exists(model_path):
-                    model_path = '/runpod-volume/ComfyUI/models/upscale_models/4x-UltraSharp.safetensors'
-                
-                upscaler = RealESRGANer(
-                    scale=4, model_path=model_path, model=rrdb_model, 
-                    tile=0, tile_pad=10, pre_pad=0, half=True, device=device
-                )
-                
-                face_enhancer = None
-                gfpgan_path = '/app/weights/GFPGANv1.4.pth'
-                if os.path.exists(gfpgan_path):
-                    face_enhancer = GFPGANer(
-                        model_path=gfpgan_path,
-                        upscale=4,
-                        arch='clean',
-                        channel_multiplier=2,
-                        bg_upsampler=upscaler
-                    )
-                
-                if is_image:
-                    img = cv2.imread(input_video, cv2.IMREAD_COLOR)
-                    if face_enhancer:
-                        _, _, output = face_enhancer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
-                    else:
-                        output, _ = upscaler.enhance(img, outscale=4)
-                    cv2.imwrite(output_video, output)
-                else:
-                    cap = cv2.VideoCapture(input_video)
-                    fps = cap.get(cv2.CAP_PROP_FPS)
-                    width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            client = genai.Client(api_key=gemini_api_key)
+            prompt = f"""
+            Analyze the following video transcript and identify the 3 most engaging, viral-worthy segments.
+            Each segment should be between 15 and 60 seconds long.
+            Return the result as a JSON array of objects, where each object has:
+            - start_time: start time in seconds (float)
+            - end_time: end time in seconds (float)
+            - description: a short, catchy title/description for the clip
+            
+            Transcript:
+            {transcript}
+            """
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+            
+            clips_data = json.loads(response.text)
+            
+            # 4. Cut and Crop
+            output_zip = os.path.join(TEMP_PATH, f"shorts_{job_id}.zip")
+            cleanup_list.append(output_zip)
+            
+            descriptions = []
+            
+            with zipfile.ZipFile(output_zip, 'w') as zipf:
+                for i, clip in enumerate(clips_data):
+                    start = clip['start_time']
+                    end = clip['end_time']
+                    desc = clip['description']
                     
-                    temp_video_path = os.path.join(TEMP_PATH, f"temp_{job_id}.mp4")
-                    cleanup_list.append(temp_video_path)
-                    out = cv2.VideoWriter(temp_video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width*4, height*4))
+                    clip_filename = f"clip_{i+1}.mp4"
+                    clip_path = os.path.join(TEMP_PATH, clip_filename)
+                    cleanup_list.append(clip_path)
                     
-                    while cap.isOpened():
-                        ret, frame = cap.read()
-                        if not ret: break
-                        if face_enhancer:
-                            _, _, enhanced_frame = face_enhancer.enhance(frame, has_aligned=False, only_center_face=False, paste_back=True)
-                        else:
-                            enhanced_frame, _ = upscaler.enhance(frame, outscale=4)
-                        out.write(enhanced_frame)
-                    cap.release()
-                    out.release()
-                    
+                    # Simple center crop for now (9:16)
                     try:
                         probe = ffmpeg.probe(input_video)
-                        has_audio = any(stream['codec_type'] == 'audio' for stream in probe['streams'])
-                        if has_audio:
-                            ffmpeg.output(ffmpeg.input(temp_video_path).video, ffmpeg.input(input_video).audio, output_video, vcodec='libx264', acodec='aac').run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
-                        else:
-                            shutil.copy(temp_video_path, output_video)
-                    except ffmpeg.Error as e:
-                        print(f"FFmpeg merge error: {e.stderr.decode() if e.stderr else str(e)}", file=sys.stderr)
-                        shutil.copy(temp_video_path, output_video)
+                        v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+                        width = int(v_stream['width'])
+                        height = int(v_stream['height'])
+                        
+                        target_w = int(height * 9 / 16)
+                        x_offset = (width - target_w) // 2
+                        
+                        ffmpeg.input(input_video, ss=start, t=end-start).output(
+                            clip_path,
+                            vf=f"crop={target_w}:{height}:{x_offset}:0",
+                            vcodec='libx264', acodec='copy', preset='ultrafast', crf=23
+                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                        
+                        zipf.write(clip_path, arcname=clip_filename)
+                        descriptions.append(f"{i+1}. {desc} ({start}s - {end}s)")
                     except Exception as e:
-                        print(f"Merge error: {e}", file=sys.stderr)
-                        shutil.copy(temp_video_path, output_video)
+                        print(f"Error processing clip {i}: {e}")
+                        
+                # Add descriptions.txt
+                desc_path = os.path.join(TEMP_PATH, "descriptions.txt")
+                cleanup_list.append(desc_path)
+                with open(desc_path, 'w', encoding='utf-8') as f:
+                    f.write("✅ Нарезка завершена! Ваши клипы:\n\n" + "\n".join(descriptions))
+                zipf.write(desc_path, arcname="descriptions.txt")
                 
-            except Exception as e:
-                print(f"Upscale error: {e}", file=sys.stderr)
-                # Fallback to Lanczos
-                vf = "scale=iw*4:ih*4:flags=lanczos"
-                try:
-                    if is_image:
-                        ffmpeg.input(input_video).output(output_video, vf=vf).run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
-                    else:
-                        ffmpeg.input(input_video).output(output_video, vf=vf, vcodec='libx264', acodec='copy').run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
-                except ffmpeg.Error as fe:
-                    raise Exception(f"FFmpeg fallback error: {fe.stderr.decode() if fe.stderr else str(fe)}")
-
+            output_video = output_zip
+            
         elif task == "ai_voice":
             voice_text = job_input.get("voice_text")
             import edge_tts

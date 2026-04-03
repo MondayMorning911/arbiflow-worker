@@ -114,22 +114,24 @@ async def download_from_url(url: str, dest_path: str):
         
     raise Exception(f"Server disconnected during download: {last_error}")
 
-async def process_heavy_task(file_path: str, task_name: str, progress_callback=None, **kwargs) -> str:
+async def process_heavy_task(file_path: str, task_name: str, progress_callback=None, is_url=False, **kwargs) -> str:
     """
-    1. Upload to Catbox
+    1. Upload to Catbox (if not is_url)
     2. Submit to RunPod
     3. Poll status
     4. Download result
     """
-    if progress_callback:
-        await progress_callback(10, "Загрузка файла в облако...")
-    
-    file_url = await upload_to_catbox(file_path)
+    if not is_url:
+        if progress_callback:
+            await progress_callback(10, "Загрузка файла в облако...")
+        file_url = await upload_to_catbox(file_path)
+    else:
+        file_url = file_path
     
     if progress_callback:
         await progress_callback(20, "Отправка задачи на GPU...")
         
-    input_data = {"video_url": file_url, "task": task_name, **kwargs}
+    input_data = {"video_url": file_url, "task": task_name, "is_url": is_url, **kwargs}
     job_id = await runpod_submit_job(task_name, input_data)
     
     attempts = 0
@@ -144,6 +146,8 @@ async def process_heavy_task(file_path: str, task_name: str, progress_callback=N
             if progress_callback:
                 if task_name == "ai_subs":
                     msg = "⏳ Расшифровка текста..." if attempts % 2 == 0 else "⚙️ Рендер видео..."
+                elif task_name == "ai_shorts":
+                    msg = "✂️ Нарезка и анализ..." if attempts % 2 == 0 else "⚙️ Рендер клипов..."
                 else:
                     msg = f"Обработка на GPU ({status})..."
                 await progress_callback(fake_prog, msg)
@@ -161,7 +165,15 @@ async def process_heavy_task(file_path: str, task_name: str, progress_callback=N
             
             ext = result_url.split('.')[-1]
             if len(ext) > 4: ext = "mp4"
-            dest_path = os.path.join(os.path.dirname(file_path), f"rp_result_{job_id}.{ext}")
+            
+            # If input was URL, we don't have a local file_path to use for dirname
+            if is_url:
+                dest_dir = os.path.join(os.getcwd(), "downloads")
+                os.makedirs(dest_dir, exist_ok=True)
+            else:
+                dest_dir = os.path.dirname(file_path)
+                
+            dest_path = os.path.join(dest_dir, f"rp_result_{job_id}.{ext}")
             await download_from_url(result_url, dest_path)
             return dest_path
         elif status in ["FAILED", "CANCELLED"]:

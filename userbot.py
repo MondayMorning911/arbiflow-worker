@@ -123,9 +123,9 @@ fix_session_database(SESSION_NAME)
 # Проверяем наличие файла сессии, чтобы избежать EOFError при попытке ввода номера телефона
 full_session_path = SESSION_NAME if SESSION_NAME.endswith(".session") else f"{SESSION_NAME}.session"
 if not os.path.exists(full_session_path):
-    logging.error(f"❌ [UserBot] Файл сессии не найден по пути: {full_session_path}")
-    logging.error("[UserBot] Пожалуйста, загрузите файл сессии в папку 'sessions/' или авторизуйтесь локально.")
-    sys.exit(1)
+    logging.warning(f"⚠️ [UserBot] Файл сессии не найден по пути: {full_session_path}")
+    logging.warning("[UserBot] Запускается интерактивная авторизация. Введите номер телефона в терминале.")
+    # sys.exit(1) - Убрали, чтобы дать возможность авторизоваться в терминале
 
 app = Client(SESSION_NAME, api_id=API_ID, api_hash=API_HASH)
 
@@ -225,7 +225,7 @@ async def process_video(app: Client, video_msg: Message, meta: dict):
 
             await mark_ready(user_id=user_id, path=unique_path, mode="single")
 
-        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode.startswith("ai_translate_") or mode == "watermark" or mode == "upscale":
+        elif mode.startswith("ai_subs_") or mode == "split_screen" or mode.startswith("ai_translate_") or mode == "watermark" or mode == "ai_shorts":
             await video_msg.reply(f"✅ Видео скачано для {mode}. Передаю боту...")
             await mark_ready(user_id=user_id, path=video_path, mode=mode)
 
@@ -452,7 +452,19 @@ async def on_meta(client, message: Message):
 
 def main():
     logging.info("🤖 UserBot слушает входящие видео от основного бота...")
-    app.run()  # 🔥 ОБЯЗАТЕЛЕН ЗАПУСК!
+    try:
+        app.run()  # 🔥 ОБЯЗАТЕЛЕН ЗАПУСК!
+    except Exception as e:
+        if "AuthKeyUnregistered" in str(type(e)) or "401 AUTH_KEY_UNREGISTERED" in str(e):
+            logging.error("❌ [UserBot] Сессия недействительна (AuthKeyUnregistered). Удаляю файл сессии и перезапускаю...")
+            if os.path.exists(full_session_path):
+                os.remove(full_session_path)
+            if os.path.exists(full_session_path + "-journal"):
+                os.remove(full_session_path + "-journal")
+            # Перезапуск скрипта
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            raise
 
 if __name__ == "__main__":
     # Safety check: do not run the userbot on RunPod

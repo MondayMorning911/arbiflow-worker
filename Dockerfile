@@ -12,13 +12,13 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Установка Python-зависимостей
+WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Скачивание весов нейросетей (Real-ESRGAN и GFPGAN)
-RUN mkdir -p /app/weights && \
-    wget -O /app/weights/RealESRGAN_x4plus.pth https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth && \
-    wget -O /app/weights/GFPGANv1.4.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth
+# ❗ ПРИНУДИТЕЛЬНО УДАЛЯЕМ conda numpy и ставим версию 1.x
+RUN conda remove -y numpy && \
+    pip install --no-cache-dir "numpy==1.26.4" && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Копируем все файлы проекта
 COPY . .

@@ -179,15 +179,18 @@ class TranslateStates(StatesGroup):
     waiting_language = State()
     waiting_video = State()
 
-class UpscaleStates(StatesGroup):
-    waiting_file = State()
+class AIShortsStates(StatesGroup):
+    waiting_file_or_link = State()
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 def main_reply_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="☰ Главное меню")]],
+        keyboard=[
+            [KeyboardButton(text="☰ Главное меню")],
+            [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="❓ Помощь")]
+        ],
         resize_keyboard=True,
         input_field_placeholder="Вставьте ссылку или файл..."
     )
@@ -209,13 +212,11 @@ def main_inline_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Видео", callback_data="ignore")],
         [InlineKeyboardButton(text="🪄 Уникализатор", callback_data="menu_unique"), InlineKeyboardButton(text="✂️ Split-Screen", callback_data="menu_split")],
+        [InlineKeyboardButton(text="🏭 AI-Content Factory", callback_data="menu_factory")],
         [InlineKeyboardButton(text="💧 Вотермарки", callback_data="menu_watermark"), InlineKeyboardButton(text="📥 Скачать", callback_data="menu_download")],
-        [InlineKeyboardButton(text="✨ Апскейл", callback_data="menu_upscale")],
-        [InlineKeyboardButton(text="AI Голос и Текст", callback_data="ignore")],
-        [InlineKeyboardButton(text="🎙 Озвучка", callback_data="menu_voice")],
-        [InlineKeyboardButton(text="📝 Субтитры", callback_data="menu_subs"), InlineKeyboardButton(text="🌍 Перевод", callback_data="menu_translate")],
-        [InlineKeyboardButton(text="Системные кнопки", callback_data="ignore")],
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="menu_profile"), InlineKeyboardButton(text="❓ Помощь", callback_data="menu_help")]
+        [InlineKeyboardButton(text="Голос и текст", callback_data="ignore")],
+        [InlineKeyboardButton(text="🎙 Озвучка", callback_data="menu_voice"), InlineKeyboardButton(text="🌍 Перевод", callback_data="menu_translate")],
+        [InlineKeyboardButton(text="📝 Субтитры", callback_data="menu_subs")]
     ])
 
 def unique_inline_keyboard():
@@ -250,11 +251,11 @@ def get_tool_preview_text(tool_id):
             "price": "Бесплатно",
             "time": "~2-5 секунд"
         },
-        "upscale": {
-            "title": "✨ Апскейл видео и фото",
-            "desc": "Улучшение качества (x2/x4) с помощью нейросети Real-ESRGAN.",
-            "price": "5 кр. / фото, 20 кр. / видео",
-            "time": "~1-5 минут"
+        "factory": {
+            "title": "🏭 AI-Content Factory",
+            "desc": "Автоматическое создание виральных клипов из длинных видео (AI-Shorts) и генерация 3D/Cinematic контента.",
+            "price": "50 кр. / видео",
+            "time": "~5-10 минут"
         },
         "voice": {
             "title": "🎙 Озвучка",
@@ -287,7 +288,16 @@ def get_tool_preview_text(tool_id):
         f"⏱ Время: {info['time']}"
     )
 
+def factory_inline_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✂️ AI-Shorts (из видео/ссылок)", callback_data="action_shorts")],
+        [InlineKeyboardButton(text="🎬 AI-Studio (3D & Cinematic)", callback_data="action_studio")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
+    ])
+
 def tool_preview_keyboard(tool_id, action_text="🎞 Загрузить видео"):
+    if tool_id == "factory":
+        return factory_inline_keyboard()
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=action_text, callback_data=f"action_{tool_id}")],
         [InlineKeyboardButton(text="🖼 Посмотреть пример", callback_data=f"example_{tool_id}")],
@@ -390,19 +400,15 @@ async def show_watermark_preview(call: CallbackQuery):
     ])
     await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
 
-@dp.callback_query(F.data == "menu_upscale")
-async def show_upscale_preview(call: CallbackQuery):
+@dp.callback_query(F.data == "menu_factory")
+async def show_factory_preview(call: CallbackQuery):
     text = (
-        "✨ **Апскейл (Улучшение качества)**\n\n"
-        "Увеличение разрешения и улучшение качества фото и видео с помощью нейросетей.\n\n"
-        "💰 Стоимость: 10 кр / фото, 50 кр / мин видео\n"
-        "⏳ Время: 1-5 мин"
+        "🏭 **AI-Content Factory**\n\n"
+        "Автоматическое создание виральных клипов из длинных видео (AI-Shorts) и генерация 3D/Cinematic контента.\n\n"
+        "💰 Стоимость: 50 кр / видео\n"
+        "⏳ Время: 5-10 мин"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚀 Начать", callback_data="action_upscale")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu_main")]
-    ])
-    await call.message.edit_text(text, reply_markup=keyboard, parse_mode="Markdown")
+    await call.message.edit_text(text, reply_markup=tool_preview_keyboard("factory"), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "menu_download")
 async def show_download_preview(call: CallbackQuery):
@@ -818,74 +824,36 @@ async def handle_download_actions(call: CallbackQuery, state: FSMContext):
             await call.message.answer("Сколько уникализированных копий создать? (например: 10)")
             await state.set_state(UniqueStates.waiting_count)
 
-@dp.callback_query(F.data == "action_upscale")
-async def open_upscale_menu(call: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "action_studio")
+async def open_studio_menu(call: CallbackQuery):
+    await call.answer("В разработке...", show_alert=True)
+
+@dp.callback_query(F.data == "action_shorts")
+async def open_shorts_menu(call: CallbackQuery, state: FSMContext):
     await call.message.edit_text(
-        "✨ Отправьте фото или видео для улучшения качества (апскейла):\n\n"
-        "💡 *Совет:* Для наилучшего качества фото отправляйте его как **Документ** (Файл), "
-        "чтобы Telegram не сжимал его перед отправкой.",
+        "✂️ **AI-Shorts (Нарезка виральных клипов)**\n\n"
+        "Отправьте мне **ссылку на YouTube** или загрузите **длинное видео** (до 2 ГБ).\n"
+        "Я проанализирую его, найду самые интересные моменты и нарежу их в вертикальном формате (9:16) с умным отслеживанием лица.",
         parse_mode="Markdown"
     )
-    await state.set_state(UpscaleStates.waiting_file)
+    await state.set_state(AIShortsStates.waiting_file_or_link)
 
-@dp.message(StateFilter(UpscaleStates.waiting_file), F.content_type.in_({ContentType.PHOTO, ContentType.VIDEO, ContentType.DOCUMENT}))
-async def handle_upscale_file(message: Message, state: FSMContext):
-    file = None
-    is_photo = False
-    if message.photo:
-        file = message.photo[-1]
-        is_photo = True
-    elif message.video:
-        file = message.video
-    elif message.document:
-        file = message.document
-        if file.mime_type and file.mime_type.startswith('image/'):
-            is_photo = True
-        elif file.file_name:
-            ext = os.path.splitext(file.file_name)[1].lower()
-            if ext in ['.jpg', '.jpeg', '.png', '.webp', '.bmp']:
-                is_photo = True
-            
-    if not file:
-        await message.answer("❌ Пожалуйста, отправьте фото или видео.")
+@dp.message(StateFilter(AIShortsStates.waiting_file_or_link))
+async def handle_shorts_input(message: Message, state: FSMContext):
+    if message.text and ("youtube.com" in message.text or "youtu.be" in message.text):
+        input_data = message.text
+        is_url = True
+    elif message.video or message.document:
+        file = message.video if message.video else message.document
+        if message.document and not (file.mime_type and file.mime_type.startswith('video/')):
+            await message.answer("❌ Пожалуйста, отправьте видео или ссылку на YouTube.")
+            return
+        input_data = file
+        is_url = False
+    else:
+        await message.answer("❌ Пожалуйста, отправьте видео или ссылку на YouTube.")
         return
 
-    ext = ".jpg" if is_photo else ".mp4"
-    if hasattr(file, 'file_name') and file.file_name:
-        _, file_ext = os.path.splitext(file.file_name)
-        if file_ext:
-            ext = file_ext
-        
-    file_name = f"upscale_in_{uuid.uuid4()}{ext}"
-    input_path = os.path.join(DOWNLOAD_DIR, file_name)
-    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-    
-    try:
-        await download_video(file, input_path)
-    except TelegramBadRequest as e:
-        if "file is too big" in str(e).lower() or "file_id" in str(e).lower():
-            meta = {
-                "user_id": message.from_user.id,
-                "mode": "upscale",
-                "file_unique_id": file.file_unique_id
-            }
-            try:
-                await bot.send_message(USERBOT_ID, json.dumps(meta))
-                await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
-                await message.answer("⏳ Файл большой. Скачиваю через UserBot, это займет немного времени...")
-            except Exception as send_e:
-                await message.answer(f"❌ Ошибка отправки на обработку. Попробуйте позже.\nПодробности: {send_e}")
-            await state.clear()
-            return
-        else:
-            await message.answer(f"❌ Ошибка скачивания: {e}")
-            await state.clear()
-            return
-    except Exception as e:
-        await message.answer(f"❌ Ошибка при скачивании: {e}")
-        await state.clear()
-        return
-    
     progress_msg = await message.answer("⚙️ Подготовка файла...")
     
     async def update_progress(percent, text_status):
@@ -898,32 +866,92 @@ async def handle_upscale_file(message: Message, state: FSMContext):
             pass
 
     try:
-        output_path = await process_heavy_task(
-            file_path=input_path,
-            task_name="upscale",
-            progress_callback=update_progress,
-            is_image=is_photo
-        )
-        
+        if is_url:
+            # Pass URL directly to RunPod
+            output_path = await process_heavy_task(
+                file_path=input_data,  # URL string
+                task_name="ai_shorts",
+                progress_callback=update_progress,
+                is_url=True
+            )
+        else:
+            # Download video first
+            ext = ".mp4"
+            if hasattr(input_data, 'file_name') and input_data.file_name:
+                _, file_ext = os.path.splitext(input_data.file_name)
+                if file_ext:
+                    ext = file_ext
+                
+            file_name = f"shorts_in_{uuid.uuid4()}{ext}"
+            input_path = os.path.join(DOWNLOAD_DIR, file_name)
+            os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+            
+            try:
+                await download_video(input_data, input_path)
+            except TelegramBadRequest as e:
+                if "file is too big" in str(e).lower() or "file_id" in str(e).lower():
+                    meta = {
+                        "user_id": message.from_user.id,
+                        "mode": "ai_shorts",
+                        "file_unique_id": input_data.file_unique_id
+                    }
+                    try:
+                        await bot.send_message(USERBOT_ID, json.dumps(meta))
+                        await bot.forward_message(chat_id=USERBOT_ID, from_chat_id=message.chat.id, message_id=message.message_id)
+                        await message.answer("⏳ Файл большой. Скачиваю через UserBot, это займет немного времени...")
+                    except Exception as send_e:
+                        await message.answer(f"❌ Ошибка отправки на обработку. Попробуйте позже.\nПодробности: {send_e}")
+                    await state.clear()
+                    return
+                else:
+                    await message.answer(f"❌ Ошибка скачивания: {e}")
+                    await state.clear()
+                    return
+            except Exception as e:
+                await message.answer(f"❌ Ошибка при скачивании: {e}")
+                await state.clear()
+                return
+                
+            # Process via RunPod
+            output_path = await process_heavy_task(
+                file_path=input_path,
+                task_name="ai_shorts",
+                progress_callback=update_progress,
+                is_url=False
+            )
+
         try:
             await progress_msg.delete()
         except Exception:
             pass
             
-        if is_photo:
-            await message.answer_photo(FSInputFile(output_path), caption="✅ Апскейл завершен!")
-            safe_to_delete = True
-        else:
-            safe_to_delete = await send_file_safely(message, output_path, caption="✅ Апскейл завершен!")
+        # RunPod should return path to a ZIP file
+        # We also need the descriptions. Let's assume the worker saves a 'descriptions.txt' inside the zip,
+        # OR we can read it from the zip and send it as a message.
+        # For now, just send the ZIP file.
         
-        if os.path.exists(input_path): os.remove(input_path)
+        # Extract descriptions.txt from zip to send as text
+        descriptions_text = "✅ Нарезка завершена! Ваши клипы в архиве."
+        import zipfile
+        try:
+            with zipfile.ZipFile(output_path, 'r') as z:
+                if 'descriptions.txt' in z.namelist():
+                    with z.open('descriptions.txt') as f:
+                        descriptions_text = f.read().decode('utf-8')
+        except Exception as e:
+            logging.error(f"Failed to read descriptions from zip: {e}")
+
+        await message.answer(descriptions_text)
+        safe_to_delete = await send_file_safely(message, output_path, caption="📦 Архив с клипами")
+        
+        if not is_url and os.path.exists(input_path): os.remove(input_path)
         if safe_to_delete and os.path.exists(output_path): os.remove(output_path)
     except Exception as e:
         try:
             await progress_msg.delete()
         except Exception:
             pass
-        await message.answer(f"❌ Ошибка при апскейле. Попробуйте позже.\nПодробности: {e}")
+        await message.answer(f"❌ Ошибка при создании Shorts. Попробуйте позже.\nПодробности: {e}")
     finally:
         await state.clear()
 
@@ -1846,9 +1874,9 @@ async def polling_sqlite():
                         else:
                             await handle_large_file_upload(path, user_id, bot)
 
-                    elif mode == "upscale":
-                        async def process_upscale_bg(user_id, input_path):
-                            progress_msg = await bot.send_message(user_id, "⚙️ Улучшение качества (Upscale)...")
+                    elif mode == "ai_shorts":
+                        async def process_shorts_bg(user_id, input_path):
+                            progress_msg = await bot.send_message(user_id, "⚙️ Нарезка клипов (AI-Shorts)...")
                             
                             async def update_progress(percent, text_status):
                                 filled = int(10 * percent / 100)
@@ -1860,12 +1888,11 @@ async def polling_sqlite():
                                     pass
                                     
                             try:
-                                is_image = input_path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
                                 output_path = await process_heavy_task(
                                     file_path=input_path,
-                                    task_name="upscale",
+                                    task_name="ai_shorts",
                                     progress_callback=update_progress,
-                                    is_image=is_image
+                                    is_url=False
                                 )
                                 
                                 try:
@@ -1873,22 +1900,23 @@ async def polling_sqlite():
                                 except Exception:
                                     pass
                                     
+                                descriptions_text = "✅ Нарезка завершена! Ваши клипы в архиве."
+                                import zipfile
+                                try:
+                                    with zipfile.ZipFile(output_path, 'r') as z:
+                                        if 'descriptions.txt' in z.namelist():
+                                            with z.open('descriptions.txt') as f:
+                                                descriptions_text = f.read().decode('utf-8')
+                                except Exception as e:
+                                    logging.error(f"Failed to read descriptions from zip: {e}")
+
+                                await bot.send_message(user_id, descriptions_text)
+
                                 file_size = get_file_size_mb(output_path)
                                 if file_size > MAX_TG_SIZE_MB:
                                     await handle_large_file_upload(output_path, user_id, bot)
                                 else:
-                                    width, height = None, None
-                                    try:
-                                        def _get_info(p):
-                                            return ffmpeg.probe(p)
-                                        probe = await asyncio.to_thread(_get_info, output_path)
-                                        width, height = get_video_dimensions(probe)
-                                    except Exception:
-                                        pass
-                                    if output_path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')):
-                                        await bot.send_photo(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!")
-                                    else:
-                                        await bot.send_video(user_id, FSInputFile(output_path), caption="✨ Качество улучшено (x4)!", width=width, height=height)
+                                    await bot.send_document(user_id, FSInputFile(output_path), caption="📦 Архив с клипами")
                                     if os.path.exists(output_path):
                                         os.remove(output_path)
                                         
@@ -1899,9 +1927,9 @@ async def polling_sqlite():
                                     await progress_msg.delete()
                                 except Exception:
                                     pass
-                                await bot.send_message(user_id, f"❌ Ошибка при улучшении качества. Попробуйте позже.\nПодробности: {e}")
+                                await bot.send_message(user_id, f"❌ Ошибка при создании Shorts. Попробуйте позже.\nПодробности: {e}")
                                 
-                        asyncio.create_task(process_upscale_bg(user_id, path))
+                        asyncio.create_task(process_shorts_bg(user_id, path))
                         await sqlite_db.delete_task(task_id)
                         continue
 
