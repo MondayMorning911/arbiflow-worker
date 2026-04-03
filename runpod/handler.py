@@ -61,32 +61,59 @@ def download_file(url, dest):
 
 def upload_to_catbox(file_path):
     import time
+    import sys
+    file_size = os.path.getsize(file_path) / (1024 * 1024)
+    print(f"Uploading file: {os.path.basename(file_path)} ({file_size:.2f} MB)", file=sys.stderr)
+    
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-    for attempt in range(3):
+    
+    # 1. Catbox (200MB limit)
+    if file_size <= 200:
+        for attempt in range(3):
+            try:
+                url = "https://catbox.moe/user/api.php"
+                with open(file_path, 'rb') as f:
+                    data = {'reqtype': 'fileupload'}
+                    files = {'fileToUpload': (os.path.basename(file_path), f)}
+                    response = requests.post(url, data=data, files=files, headers=headers, timeout=180)
+                    if response.status_code == 200:
+                        return response.text.strip()
+                    print(f"Catbox attempt {attempt+1} failed: {response.status_code}", file=sys.stderr)
+            except Exception as e:
+                print(f"Catbox attempt {attempt+1} error: {e}", file=sys.stderr)
+            time.sleep(2)
+    else:
+        print("File too large for Catbox (>200MB), skipping...", file=sys.stderr)
+        
+    # 2. Fallback to 0x0.st (512MB limit)
+    if file_size <= 512:
         try:
-            url = "https://catbox.moe/user/api.php"
+            url = "https://0x0.st"
             with open(file_path, 'rb') as f:
-                data = {'reqtype': 'fileupload'}
-                files = {'fileToUpload': (os.path.basename(file_path), f)}
-                response = requests.post(url, data=data, files=files, headers=headers, timeout=120)
+                files = {'file': (os.path.basename(file_path), f)}
+                response = requests.post(url, files=files, headers=headers, timeout=180)
                 if response.status_code == 200:
                     return response.text.strip()
-        except:
-            pass
-        time.sleep(2)
-        
-    # Fallback to 0x0.st
+                print(f"0x0.st failed: {response.status_code}", file=sys.stderr)
+        except Exception as e:
+            print(f"0x0.st error: {e}", file=sys.stderr)
+            
+    # 3. Fallback to file.io (2GB limit, but expires after 1 download)
     try:
-        url = "https://0x0.st"
+        print("Trying file.io fallback...", file=sys.stderr)
+        url = "https://file.io"
         with open(file_path, 'rb') as f:
-            files = {'file': (os.path.basename(file_path), f)}
-            response = requests.post(url, files=files, headers=headers, timeout=120)
+            files = {'file': f}
+            response = requests.post(url, files=files, headers=headers, timeout=180)
             if response.status_code == 200:
-                return response.text.strip()
-    except:
-        pass
+                data = response.json()
+                if data.get("success"):
+                    return data.get("link")
+            print(f"file.io failed: {response.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"file.io error: {e}", file=sys.stderr)
         
-    raise Exception("Upload to cloud failed after multiple attempts")
+    raise Exception(f"Upload to cloud failed after multiple attempts (File size: {file_size:.2f} MB)")
 
 def format_timestamp(seconds):
     hours = int(seconds // 3600)
@@ -153,12 +180,17 @@ def handler(job):
     cleanup_list = [input_video, output_video]
     
     try:
-        download_file(video_url, input_video)
+        is_url = job_input.get("is_url", False)
+        
+        # Skip direct download for tasks that handle it themselves (like ai_shorts with URL)
+        if not (task == "ai_shorts" and is_url):
+            download_file(video_url, input_video)
         
         is_image = job_input.get("is_image", False)
         if is_image:
             new_input = input_video.replace('.mp4', '.jpg')
-            os.rename(input_video, new_input)
+            if os.path.exists(input_video):
+                os.rename(input_video, new_input)
             input_video = new_input
             output_video = output_video.replace('.mp4', '.jpg')
             cleanup_list.extend([input_video, output_video])
@@ -267,13 +299,14 @@ def handler(job):
                         width = int(v_stream['width'])
                         height = int(v_stream['height'])
                         
-                        target_w = int(height * 9 / 16)
-                        x_offset = (width - target_w) // 2
+                        target_h = min(height, 1080)
+                        target_w = int(target_h * 9 / 16)
+                        x_offset = (width - int(height * 9 / 16)) // 2
                         
                         ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
-                            vf=f"crop={target_w}:{height}:{x_offset}:0",
-                            vcodec='libx264', acodec='copy', preset='ultrafast', crf=23
+                            vf=f"crop={int(height * 9 / 16)}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
+                            vcodec='libx264', acodec='aac', preset='fast', crf=26
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                         
                         zipf.write(clip_path, arcname=clip_filename)
