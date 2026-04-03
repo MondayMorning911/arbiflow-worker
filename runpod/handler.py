@@ -360,18 +360,26 @@ def handler(job):
                         width = int(v_stream['width'])
                         height = int(v_stream['height'])
                         
+                        # libx264 требует четные размеры (делимые на 2)
+                        crop_w = int(height * 9 / 16)
+                        if crop_w % 2 != 0: crop_w -= 1
+                        
                         target_h = min(height, 1080)
+                        if target_h % 2 != 0: target_h -= 1
+                        
                         target_w = int(target_h * 9 / 16)
-                        x_offset = (width - int(height * 9 / 16)) // 2
+                        if target_w % 2 != 0: target_w -= 1
+                        
+                        x_offset = (width - crop_w) // 2
                         
                         ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
-                            vf=f"crop={int(height * 9 / 16)}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
+                            vf=f"crop={crop_w}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
                             vcodec='libx264', acodec='aac', preset='fast', crf=26
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                         
                         zipf.write(clip_path, arcname=clip_filename)
-                        descriptions.append(f"{i+1}. {desc} ({start}s - {end}s)")
+                        descriptions.append(f"🎬 {i+1}.mp4 - {desc}")
                     except Exception as e:
                         print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                         
@@ -383,6 +391,12 @@ def handler(job):
                 zipf.write(desc_path, arcname="descriptions.txt")
                 
             output_video = output_zip
+            result_url = upload_to_catbox(output_video)
+            return {
+                "status": "success", 
+                "result_url": result_url, 
+                "message": "✅ Нарезка завершена! Ваши клипы:\n\n" + "\n".join(descriptions)
+            }
             
         elif task == "ai_voice":
             print(f"🗣️ [ArbiFlow Worker]: Starting AI-Voice task...", flush=True)
