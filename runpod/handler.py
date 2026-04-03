@@ -16,6 +16,9 @@ from dotenv import load_dotenv
 # --- EARLY LOGGING ---
 print("🚀 [ArbiFlow Worker]: Starting initialization...", flush=True)
 
+# Load environment variables from .env if it exists
+load_dotenv()
+
 try:
     import yt_dlp
     from google import genai
@@ -240,6 +243,26 @@ def handler(job):
                 
         elif task == "ai_shorts":
             print(f"🎬 [ArbiFlow Worker]: Starting AI-Shorts task for {video_url}", flush=True)
+            
+            # Try to find the Gemini API key
+            gemini_api_key = os.getenv("GEMINI_API_KEY")
+            
+            # Fallback: search for similar names if not found exactly
+            if not gemini_api_key:
+                print("❓ [ArbiFlow Worker]: GEMINI_API_KEY not found directly. Searching for similar keys...", flush=True)
+                for key in os.environ:
+                    if "GEMINI" in key.upper() and "KEY" in key.upper():
+                        gemini_api_key = os.environ[key]
+                        print(f"💡 [ArbiFlow Worker]: Found potential key in environment variable: {key}", flush=True)
+                        break
+            
+            if not gemini_api_key:
+                print(f"❌ [ArbiFlow Worker]: GEMINI_API_KEY NOT FOUND!", flush=True)
+                print(f"📍 [ArbiFlow Worker]: Available env vars: {list(os.environ.keys())}", flush=True)
+                raise Exception("GEMINI_API_KEY is not set in RunPod Environment Variables. Please check your Endpoint configuration.")
+            
+            print(f"🔑 [ArbiFlow Worker]: API Key found (starts with: {gemini_api_key[:4]}...)")
+            
             is_url = job_input.get("is_url", False)
             
             # 1. Download if URL
@@ -269,10 +292,7 @@ def handler(job):
                 
             # 3. Analyze with Gemini
             print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with Gemini...", flush=True)
-            gemini_api_key = os.environ.get("GEMINI_API_KEY")
-            if not gemini_api_key:
-                raise Exception("GEMINI_API_KEY is not set")
-                
+            
             client = genai.Client(api_key=gemini_api_key)
             prompt = f"""
             Analyze the following video transcript and identify the 3 most engaging, viral-worthy segments.
@@ -287,7 +307,7 @@ def handler(job):
             """
             
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
