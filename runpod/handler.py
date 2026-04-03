@@ -244,32 +244,9 @@ def handler(job):
         elif task == "ai_shorts":
             print(f"🎬 [ArbiFlow Worker]: Starting AI-Shorts task for {video_url}", flush=True)
             
-            # 1. Пытаемся найти ключ Gemini разными способами
-            gemini_api_key = job_input.get("gemini_api_key") # Способ 1: Из входа задачи
-            
-            if not gemini_api_key:
-                gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") # Способ 2: Стандартные переменные
-            
-            # Способ 3: ХАРДКОД (по просьбе пользователя, если env не работают)
-            if not gemini_api_key:
-                gemini_api_key = "AIzaSyAln9UCaTjxZxcmyuY-kb89EbzLz-6ObAA"
-                print("⚠️ [ArbiFlow Worker]: Using hardcoded Gemini API Key.", flush=True)
-            
-            if not gemini_api_key:
-                # Способ 4: Ищем любой ключ, похожий на Google API Key (начинается на AIza)
-                print("❓ [ArbiFlow Worker]: GEMINI_API_KEY not found. Scanning all env vars for AIza pattern...", flush=True)
-                for key, value in os.environ.items():
-                    if value.startswith("AIzaSy"):
-                        gemini_api_key = value
-                        print(f"💡 [ArbiFlow Worker]: Found potential Gemini key in variable: {key}", flush=True)
-                        break
-            
-            if not gemini_api_key:
-                print(f"❌ [ArbiFlow Worker]: NO API KEY FOUND ANYWHERE!", flush=True)
-                print(f"📍 [ArbiFlow Worker]: Available env vars: {list(os.environ.keys())}", flush=True)
-                raise Exception("GEMINI_API_KEY is missing. Please add it to RunPod Environment Variables or pass it in the job input.")
-            
-            print(f"🔑 [ArbiFlow Worker]: API Key initialized (starts with: {gemini_api_key[:4]}...)")
+            # 1. API Key DeepSeek (Хардкод по просьбе пользователя)
+            deepseek_api_key = "sk-e6f8353356a149bdb6e10bb54c9e5609"
+            print(f"🔑 [ArbiFlow Worker]: Using DeepSeek API Key (starts with: {deepseek_api_key[:4]}...)")
             
             is_url = job_input.get("is_url", False)
             
@@ -298,10 +275,9 @@ def handler(job):
             if not transcript:
                 raise Exception("Transcript is empty. Could not detect speech.")
                 
-            # 3. Analyze with Gemini
-            print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with Gemini...", flush=True)
+            # 3. Analyze with DeepSeek
+            print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with DeepSeek...", flush=True)
             
-            client = genai.Client(api_key=gemini_api_key)
             prompt = f"""
             Analyze the following video transcript and identify the 3 most engaging, viral-worthy segments.
             Each segment should be between 15 and 60 seconds long.
@@ -314,16 +290,50 @@ def handler(job):
             {transcript}
             """
             
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                ),
-            )
+            try:
+                headers = {
+                    "Authorization": f"Bearer {deepseek_api_key}",
+                    "Content-Type": "application/json"
+                }
+                payload = {
+                    "model": "deepseek-chat",
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful assistant that identifies viral video segments and returns ONLY valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "response_format": {"type": "json_object"}
+                }
+                
+                ds_response = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
+                ds_response.raise_for_status()
+                
+                ds_data = ds_response.json()
+                content = ds_data['choices'][0]['message']['content']
+                
+                # DeepSeek might return JSON inside markdown blocks or just raw JSON
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                clips_data = json.loads(content)
+                
+                # If DeepSeek returns an object with a key like "clips" or "segments", extract it
+                if isinstance(clips_data, dict):
+                    for key in ["clips", "segments", "viral_segments"]:
+                        if key in clips_data:
+                            clips_data = clips_data[key]
+                            break
+                
+                if not isinstance(clips_data, list):
+                    # Fallback if it's still not a list
+                    clips_data = [clips_data] if isinstance(clips_data, dict) else []
+                
+            except Exception as e:
+                print(f"❌ [ArbiFlow Worker]: DeepSeek Error: {str(e)}", flush=True)
+                raise Exception(f"AI Analysis failed: {str(e)}")
             
-            clips_data = json.loads(response.text)
-            print(f"✅ [ArbiFlow Worker]: Gemini found {len(clips_data)} clips.", flush=True)
+            print(f"✅ [ArbiFlow Worker]: DeepSeek found {len(clips_data)} clips.", flush=True)
             
             # 4. Cut and Crop
             output_zip = os.path.join(TEMP_PATH, f"shorts_{job_id}.zip")
