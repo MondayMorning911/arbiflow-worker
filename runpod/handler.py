@@ -1,22 +1,34 @@
 import os
 import sys
+import uuid
+import requests
+import runpod
+import torch
+import ffmpeg
+import traceback
+import shutil
+import json
+import zipfile
+import asyncio
+import time
+from dotenv import load_dotenv
 
 # --- EARLY LOGGING ---
 print("🚀 [ArbiFlow Worker]: Starting initialization...", flush=True)
 
 try:
-    import uuid
-    import requests
-    import runpod
-    import torch
-    import ffmpeg
-    import traceback
-    import shutil
-    from dotenv import load_dotenv
-    print("✅ [ArbiFlow Worker]: Core modules imported.", flush=True)
+    import yt_dlp
+    from google import genai
+    from google.genai import types
+    import edge_tts
+    from faster_whisper import WhisperModel
+    print("✅ [ArbiFlow Worker]: All modules imported successfully.", flush=True)
+except ImportError as e:
+    print(f"❌ [ArbiFlow Worker]: MISSING MODULE: {e}", file=sys.stderr, flush=True)
+    # Don't exit yet, let's see if we can provide more info
 except Exception as e:
-    print(f"❌ [ArbiFlow Worker]: FAILED TO IMPORT CORE MODULES: {e}", file=sys.stderr, flush=True)
-    sys.exit(1)
+    print(f"❌ [ArbiFlow Worker]: IMPORT ERROR: {e}", file=sys.stderr, flush=True)
+    traceback.print_exc()
 
 # --- CONFIGURATION ---
 VOLUME_PATH = "/runpod-volume"
@@ -40,15 +52,22 @@ whisper_model = None
 def get_whisper_model():
     global whisper_model
     if whisper_model is None:
-        from faster_whisper import WhisperModel
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        compute_type = "float16" if torch.cuda.is_available() else "int8"
-        whisper_model = WhisperModel(
-            "large-v3", 
-            device=device, 
-            compute_type=compute_type, 
-            download_root=MODEL_PATH
-        )
+        print("📥 [ArbiFlow Worker]: Loading Whisper model (large-v3)...", flush=True)
+        try:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if torch.cuda.is_available() else "int8"
+            print(f"🖥️ [ArbiFlow Worker]: Using device: {device} ({compute_type})", flush=True)
+            
+            whisper_model = WhisperModel(
+                "large-v3", 
+                device=device, 
+                compute_type=compute_type, 
+                download_root=MODEL_PATH
+            )
+            print("✅ [ArbiFlow Worker]: Whisper model loaded.", flush=True)
+        except Exception as e:
+            print(f"❌ [ArbiFlow Worker]: Failed to load Whisper: {e}", file=sys.stderr, flush=True)
+            raise e
     return whisper_model
 
 def download_file(url, dest):
@@ -220,17 +239,12 @@ def handler(job):
             ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                 
         elif task == "ai_shorts":
-            import yt_dlp
-            import zipfile
-            from google import genai
-            from google.genai import types
-            import json
-            import cv2
-            
+            print(f"🎬 [ArbiFlow Worker]: Starting AI-Shorts task for {video_url}", flush=True)
             is_url = job_input.get("is_url", False)
             
             # 1. Download if URL
             if is_url:
+                print(f"📥 [ArbiFlow Worker]: Downloading video via yt-dlp...", flush=True)
                 ydl_opts = {
                     'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'outtmpl': input_video,
@@ -241,14 +255,20 @@ def handler(job):
                     ydl.download([video_url])
             
             # 2. Transcribe
+            print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
             model_instance = get_whisper_model()
             segments, info = model_instance.transcribe(input_video, beam_size=5, word_timestamps=True, vad_filter=True)
             
             transcript = ""
-            for segment in segments:
+            segments_list = list(segments)
+            for segment in segments_list:
                 transcript += f"[{format_timestamp(segment.start)} - {format_timestamp(segment.end)}] {segment.text}\n"
+            
+            if not transcript:
+                raise Exception("Transcript is empty. Could not detect speech.")
                 
             # 3. Analyze with Gemini
+            print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with Gemini...", flush=True)
             gemini_api_key = os.environ.get("GEMINI_API_KEY")
             if not gemini_api_key:
                 raise Exception("GEMINI_API_KEY is not set")
@@ -275,6 +295,7 @@ def handler(job):
             )
             
             clips_data = json.loads(response.text)
+            print(f"✅ [ArbiFlow Worker]: Gemini found {len(clips_data)} clips.", flush=True)
             
             # 4. Cut and Crop
             output_zip = os.path.join(TEMP_PATH, f"shorts_{job_id}.zip")
@@ -282,6 +303,7 @@ def handler(job):
             
             descriptions = []
             
+            print(f"✂️ [ArbiFlow Worker]: Creating ZIP and processing clips...", flush=True)
             with zipfile.ZipFile(output_zip, 'w') as zipf:
                 for i, clip in enumerate(clips_data):
                     start = clip['start_time']
@@ -292,6 +314,7 @@ def handler(job):
                     clip_path = os.path.join(TEMP_PATH, clip_filename)
                     cleanup_list.append(clip_path)
                     
+                    print(f"🎬 [ArbiFlow Worker]: Processing clip {i+1}: {start}s - {end}s", flush=True)
                     # Simple center crop for now (9:16)
                     try:
                         probe = ffmpeg.probe(input_video)
@@ -312,7 +335,7 @@ def handler(job):
                         zipf.write(clip_path, arcname=clip_filename)
                         descriptions.append(f"{i+1}. {desc} ({start}s - {end}s)")
                     except Exception as e:
-                        print(f"Error processing clip {i}: {e}")
+                        print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                         
                 # Add descriptions.txt
                 desc_path = os.path.join(TEMP_PATH, "descriptions.txt")
@@ -324,9 +347,8 @@ def handler(job):
             output_video = output_zip
             
         elif task == "ai_voice":
+            print(f"🗣️ [ArbiFlow Worker]: Starting AI-Voice task...", flush=True)
             voice_text = job_input.get("voice_text")
-            import edge_tts
-            import asyncio
             output_audio = output_video.replace('.mp4', '.mp3')
             cleanup_list.append(output_audio)
             asyncio.run(edge_tts.Communicate(voice_text, "ru-RU-SvetlanaNeural").save(output_audio))
