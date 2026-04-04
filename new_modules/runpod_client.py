@@ -114,7 +114,7 @@ async def download_from_url(url: str, dest_path: str):
         
     raise Exception(f"Server disconnected during download: {last_error}")
 
-async def process_heavy_task(file_path: str, task_name: str, progress_callback=None, is_url=False, **kwargs) -> str:
+async def process_heavy_task(file_path: str, task_name: str, progress_callback=None, is_url=False, cookies: str = None, **kwargs) -> str:
     """
     1. Upload to Catbox (if not is_url)
     2. Submit to RunPod
@@ -131,7 +131,7 @@ async def process_heavy_task(file_path: str, task_name: str, progress_callback=N
     if progress_callback:
         await progress_callback(20, "Отправка задачи на GPU...")
         
-    input_data = {"video_url": file_url, "task": task_name, "is_url": is_url, **kwargs}
+    input_data = {"video_url": file_url, "task": task_name, "is_url": is_url, "cookies": cookies, **kwargs}
     job_id = await runpod_submit_job(task_name, input_data)
     
     attempts = 0

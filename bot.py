@@ -866,30 +866,41 @@ async def handle_shorts_input(message: Message, state: FSMContext):
             pass
 
     try:
-        if is_url:
-            # Скачиваем видео локально, чтобы обойти блокировку YouTube на RunPod
-            await update_progress(5, "Скачивание видео с YouTube...")
-            temp_dir = os.path.join(DOWNLOAD_DIR, f"yt_{uuid.uuid4().hex[:8]}")
-            os.makedirs(temp_dir, exist_ok=True)
+        cookies_content = None
+        cookies_dir = os.path.join(BASE_DIR, "cookies")
+        cookies_file_default = os.path.join(BASE_DIR, "cookies.txt")
+        
+        # Сначала проверяем папку с куками для ротации
+        if os.path.exists(cookies_dir) and os.path.isdir(cookies_dir):
+            cookie_files = [f for f in os.listdir(cookies_dir) if f.endswith(".txt")]
+            if cookie_files:
+                selected_cookie = random.choice(cookie_files)
+                cookies_path = os.path.join(cookies_dir, selected_cookie)
+                try:
+                    with open(cookies_path, "r") as f:
+                        cookies_content = f.read()
+                    logging.info(f"🍪 [Cookies]: Using rotated cookie from {selected_cookie}")
+                except Exception as e:
+                    logging.error(f"Error reading {selected_cookie}: {e}")
+        
+        # Если в папке ничего нет, пробуем дефолтный файл
+        if not cookies_content and os.path.exists(cookies_file_default):
             try:
-                # Используем локальный yt-dlp (у него обычно домашний IP или прокси)
-                input_path = await download_video_ytdlp(input_data, temp_dir)
-                
-                # Теперь отправляем как файл (он загрузится на Catbox и воркер скачает его по прямой ссылке)
-                output_path = await process_heavy_task(
-                    file_path=input_path,
-                    task_name="ai_shorts",
-                    progress_callback=update_progress,
-                    is_url=False
-                )
-                
-                # Чистим за собой
-                if os.path.exists(input_path):
-                    os.remove(input_path)
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                with open(cookies_file_default, "r") as f:
+                    cookies_content = f.read()
+                logging.info("🍪 [Cookies]: Using default cookies.txt")
             except Exception as e:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                raise e
+                logging.error(f"Error reading cookies.txt: {e}")
+
+        if is_url:
+            # Возвращаемся к прямому скачиванию на RunPod, но с куками
+            output_path = await process_heavy_task(
+                file_path=input_data,  # URL string
+                task_name="ai_shorts",
+                progress_callback=update_progress,
+                is_url=True,
+                cookies=cookies_content
+            )
         else:
             # Download video first
             ext = ".mp4"

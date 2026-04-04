@@ -343,6 +343,15 @@ def handler(job):
             # 1. Download if URL
             if is_url:
                 print(f"📥 [ArbiFlow Worker]: Downloading video via yt-dlp...", flush=True)
+                
+                cookies_content = job_input.get("cookies")
+                cookies_path = None
+                if cookies_content:
+                    cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
+                    with open(cookies_path, "w") as f:
+                        f.write(cookies_content)
+                    print(f"🍪 [ArbiFlow Worker]: Using provided cookies.", flush=True)
+
                 ydl_opts = {
                     'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                     'outtmpl': input_video,
@@ -354,8 +363,16 @@ def handler(job):
                     'youtube_skip_dash_manifest': True,
                     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([video_url])
+                
+                if cookies_path:
+                    ydl_opts['cookiefile'] = cookies_path
+
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([video_url])
+                finally:
+                    if cookies_path and os.path.exists(cookies_path):
+                        os.remove(cookies_path)
             
             # 2. Transcribe
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
