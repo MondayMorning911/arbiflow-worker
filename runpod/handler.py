@@ -60,9 +60,25 @@ def get_whisper_model():
     if whisper_model is None:
         print("📥 [ArbiFlow Worker]: Loading Whisper model (large-v3)...", flush=True)
         try:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            compute_type = "float16" if torch.cuda.is_available() else "int8"
-            print(f"🖥️ [ArbiFlow Worker]: Using device: {device} ({compute_type})", flush=True)
+            cuda_available = torch.cuda.is_available()
+            if cuda_available:
+                device = "cuda"
+                compute_type = "float16"
+                gpu_name = torch.cuda.get_device_name(0)
+                print(f"🖥️ [ArbiFlow Worker]: GPU DETECTED: {gpu_name}", flush=True)
+            else:
+                device = "cpu"
+                compute_type = "int8"
+                print("🖥️ [ArbiFlow Worker]: NO GPU DETECTED. Falling back to CPU mode.", flush=True)
+                # Проверим, видит ли система драйвер вообще
+                try:
+                    import subprocess
+                    n_smi = subprocess.check_output(["nvidia-smi"], stderr=subprocess.STDOUT).decode()
+                    print(f"🔍 [ArbiFlow Worker]: nvidia-smi output:\n{n_smi}", flush=True)
+                except Exception:
+                    print("🔍 [ArbiFlow Worker]: nvidia-smi command failed. Drivers might be missing.", flush=True)
+
+            print(f"⚙️ [ArbiFlow Worker]: Using device: {device} ({compute_type})", flush=True)
             
             whisper_model = WhisperModel(
                 "large-v3", 
