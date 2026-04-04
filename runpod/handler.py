@@ -76,20 +76,44 @@ def get_whisper_model():
             raise e
     return whisper_model
 
-def get_face_detector():
-    global mp_face_detection
-    if mp_face_detection is None:
+mp_face_detection_instance = None
+cv2_face_cascade_instance = None
+face_detection_method = None
+
+def init_face_detector():
+    global mp_face_detection_instance, cv2_face_cascade_instance, face_detection_method
+    if face_detection_method is not None:
+        return
+        
+    try:
+        import mediapipe as mp
         try:
-            import mediapipe.python.solutions.face_detection as face_detection
-            mp_face_detection = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+            import mediapipe.python.solutions.face_detection as mp_fd
         except ImportError:
-            import mediapipe as mp
-            mp_face_detection = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
-    return mp_face_detection
+            mp_fd = mp.solutions.face_detection
+        mp_face_detection_instance = mp_fd.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        face_detection_method = "mediapipe"
+        print("✅ [ArbiFlow Worker]: MediaPipe face detection initialized.", flush=True)
+        return
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow Worker]: MediaPipe initialization failed ({e}). Falling back to OpenCV.", flush=True)
+        
+    try:
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cv2_face_cascade_instance = cv2.CascadeClassifier(cascade_path)
+        face_detection_method = "opencv"
+        print("✅ [ArbiFlow Worker]: OpenCV face detection initialized.", flush=True)
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow Worker]: OpenCV initialization failed ({e}). Face detection disabled.", flush=True)
+        face_detection_method = "disabled"
 
 def get_face_center_x(video_path, start_time, duration, original_width):
     try:
-        detector = get_face_detector()
+        init_face_detector()
+        
+        if face_detection_method == "disabled":
+            return original_width // 2
+            
         cap = cv2.VideoCapture(video_path)
         
         # Берем кадры каждые 2 секунды для более точного отслеживания
@@ -105,13 +129,23 @@ def get_face_center_x(video_path, start_time, duration, original_width):
             ret, frame = cap.read()
             if not ret: continue
             
-            results = detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            if results.detections:
-                # Берем самое уверенное лицо
-                best_detection = max(results.detections, key=lambda d: d.score[0])
-                bbox = best_detection.location_data.relative_bounding_box
-                center_x = (bbox.xmin + bbox.width / 2) * original_width
-                x_coords.append(center_x)
+            if face_detection_method == "mediapipe" and mp_face_detection_instance:
+                results = mp_face_detection_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                if results.detections:
+                    # Берем самое уверенное лицо
+                    best_detection = max(results.detections, key=lambda d: d.score[0])
+                    bbox = best_detection.location_data.relative_bounding_box
+                    center_x = (bbox.xmin + bbox.width / 2) * original_width
+                    x_coords.append(center_x)
+            elif face_detection_method == "opencv" and cv2_face_cascade_instance:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 4)
+                if len(faces) > 0:
+                    # Берем самое большое лицо
+                    faces = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
+                    x, y, w, h = faces[0]
+                    center_x = x + w / 2
+                    x_coords.append(center_x)
         
         cap.release()
         
@@ -390,9 +424,17 @@ def handler(job):
             
             def analyze_block(block):
                 prompt = f"""
-                Ты — скаут вирусного контента. Проанализируй этот фрагмент видео.
-                Найди от 0 до 3 лучших самостоятельных сцен (каждая 30-120 сек) для Shorts/Reels.
-                Сцена должна иметь хук, развитие и завершение.
+                Ты — главный продюсер вирусного контента (TikTok, Reels, Shorts). Твоя задача — найти самые "сочные" и вовлекающие моменты в этом фрагменте видео.
+                Это может быть подкаст, интервью, влог или другой формат. Ищи моменты, где задается интересная тема, дилемма (например, "Она 10 из 10, но..."), смешная история, горячий спор или глубокая мысль.
+
+                КРИТЕРИИ ИДЕАЛЬНОЙ СЦЕНЫ:
+                1. Идеальное начало (Хук): Сцена ДОЛЖНА начинаться ровно с начала новой темы или вопроса. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО начинать сцену с обрывка прошлой темы, смеха без контекста или конца предыдущей мысли. Зритель должен сразу понять контекст.
+                2. Развитие и финал: Внутри сцены должно быть полноценное рассуждение или история, которая логически завершается (панчлайн, вывод, интрига).
+                3. БЕЗ РЕКЛАМЫ: Строго игнорируй любые рекламные интеграции, просьбы подписаться, спонсорские вставки или моменты, где играет только музыка без смысловой речи.
+                4. Длительность: от 30 до 120 секунд.
+                5. Точность: Описание (scene_topic) и заголовок (cover_title) должны ИДЕАЛЬНО и ТОЧНО соответствовать тому, о чем реально говорят в выбранном отрезке. Не придумывай того, чего нет в тексте.
+
+                Найди от 0 до 3 лучших самостоятельных сцен. Если в блоке только скучный треп, реклама или обрывки — смело возвращай пустой массив. Лучше 0 сцен, чем плохая сцена.
                 
                 ТРАНСКРИПТ:
                 {block['text']}
@@ -403,16 +445,16 @@ def handler(job):
                     {{
                       "start_time": 12.5,
                       "end_time": 55.0,
-                      "viral_score": 8,
-                      "emotion_type": "юмор",
-                      "viral_reason": "почему залетит",
-                      "hook_text": "первые слова",
-                      "cover_title": "заголовок",
-                      "scene_topic": "тема"
+                      "viral_score": 9,
+                      "emotion_type": "юмор/дилемма/шок/инсайт",
+                      "viral_reason": "Почему это удержит внимание зрителя до конца",
+                      "hook_text": "Точная первая фраза, с которой начинается клип",
+                      "cover_title": "Кликабельный заголовок (до 5 слов)",
+                      "scene_topic": "Детальное и точное описание того, что происходит в клипе"
                     }}
                   ]
                 }}
-                Если сцен нет, верни {{"scenes": []}}.
+                Если подходящих сцен нет, верни {{"scenes": []}}.
                 """
                 headers = {
                     "Authorization": f"Bearer {deepseek_api_key}",
