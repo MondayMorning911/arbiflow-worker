@@ -298,65 +298,71 @@ def extract_video_id(url):
     return url
 
 def download_via_rapidapi(video_url, dest_path):
-    # Извлекаем ID видео, так как этот API требует именно его
+    """
+    Стабильное скачивание видео в 1080p через RapidAPI для продакшена ArbiFlow.
+    """
+    print(f"📡 [ArbiFlow]: Получение прямой ссылки через RapidAPI (Target: 1080p)...", flush=True)
+    
+    # 1. Извлекаем ID видео из ссылки (поддерживает разные форматы YouTube)
     video_id = extract_video_id(video_url)
-    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/downloadVideo"
+    if not video_id or len(video_id) != 11:
+        print(f"❌ [ArbiFlow]: Не удалось распознать ID видео в ссылке: {video_url}", flush=True)
+        return False
+
+    # 2. Конфигурация API
+    rapid_url = "https://youtube-media-downloader.p.rapidapi.com/v2/video/details"
     headers = {
         "x-rapidapi-key": "a46b139ademsh2c7c294d619b0a2p1015bajsnb930db830785",
-        "x-rapidapi-host": "yt-video-audio-downloader-api.p.rapidapi.com",
-        "Content-Type": "application/json"
+        "x-rapidapi-host": "youtube-media-downloader.p.rapidapi.com"
     }
-    
-    # Пробуем 1080p (максимум для этого API)
-    payload = {
-        "id": video_id,
-        "quality": "1080" 
-    }
-    
+    params = {"videoId": video_id}
+
     try:
-        print(f"🌐 [ArbiFlow]: Requesting RapidAPI (1080p target) for ID: {video_id}", flush=True)
-        # Этот API требует строго POST
-        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        # Запрос метаданных видео
+        response = requests.get(rapid_url, headers=headers, params=params, timeout=20)
+        response.raise_for_status()
+        data = response.json()
+
+        # Список доступных комбинированных ссылок (видео + аудио)
+        items = data.get("videos", {}).get("items", [])
+        if not items:
+            print(f"❌ [ArbiFlow]: API не вернул доступных ссылок для ID: {video_id}", flush=True)
+            return False
+            
+        # 🎯 Поиск 1080p
+        final_link = None
+        for item in items:
+            if item.get("quality") == "1080p":
+                final_link = item.get("url")
+                print(f"💎 [ArbiFlow]: Качество 1080p подтверждено.", flush=True)
+                break
         
-        if response.status_code == 200:
-            data = response.json()
-            
-            # 1. Если API вернуло прямую ссылку сразу
-            download_url = data.get("link") or data.get("url") or data.get("downloadUrl")
-            
-            # 2. Если API работает через Job (нужно подождать)
-            job_id = data.get("jobId")
-            if not download_url and job_id:
-                print(f"⏳ [ArbiFlow]: Job created ({job_id}). Waiting for conversion...", flush=True)
-                status_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/status"
-                for _ in range(15): # Ждем до 150 секунд
-                    time.sleep(10)
-                    s_resp = requests.get(status_url, params={"jobId": job_id}, headers=headers)
-                    if s_resp.status_code == 200:
-                        s_data = s_resp.json()
-                        if s_data.get("status") == "completed":
-                            download_url = s_data.get("link") or s_data.get("url")
-                            break
-                        elif s_data.get("status") == "failed":
-                            print(f"❌ [ArbiFlow]: RapidAPI Job failed.", flush=True)
-                            break
-            
-            if download_url:
-                print(f"📥 [ArbiFlow]: Link obtained. Downloading 1080p video...", flush=True)
-                with requests.get(download_url, stream=True, timeout=300) as r:
-                    r.raise_for_status()
-                    with open(dest_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=32768):
-                            f.write(chunk)
-                return True
-            else:
-                print(f"⚠️ [ArbiFlow]: RapidAPI could not provide a link. Response: {data}", flush=True)
+        # Фолбэк: если 1080p нет, берем самую первую (лучшую) ссылку
+        if not final_link:
+            final_link = items[0].get("url")
+            print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано качество: {items[0].get('quality')}", flush=True)
+
+        # 3. Загрузка файла на RunPod
+        print(f"📥 [ArbiFlow]: Начинаю прямую загрузку в {dest_path}...", flush=True)
+        with requests.get(final_link, stream=True) as r:
+            r.raise_for_status()
+            with open(dest_path, 'wb') as f:
+                # Качаем кусками по 1МБ, чтобы не забивать оперативку
+                for chunk in r.iter_content(chunk_size=1024*1024): 
+                    if chunk:
+                        f.write(chunk)
+        
+        # Проверка, что файл реально создался и не пустой
+        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+            print(f"✅ [ArbiFlow]: Файл успешно сохранен ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+            return True
         else:
-            print(f"⚠️ [ArbiFlow]: RapidAPI error {response.status_code}: {response.text}", flush=True)
+            print("❌ [ArbiFlow]: Файл не был сохранен или он пустой", flush=True)
+            return False
+
     except Exception as e:
-        print(f"❌ [ArbiFlow]: RapidAPI exception: {e}", flush=True)
-    
-    return False
+        print(f"🔥 [ArbiFlow]: Критическая ошибка при скачивании через RapidAPI: {e}", flush=True)
+        return False
 
 def handler(job):
     job_id = job.get("id")
