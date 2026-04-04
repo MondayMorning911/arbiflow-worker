@@ -112,7 +112,7 @@ def get_face_center_x(video_path, start_time, duration, original_width):
         init_face_detector()
         
         if face_detection_method == "disabled":
-            return original_width // 2
+            return original_width // 2, False
             
         cap = cv2.VideoCapture(video_path)
         
@@ -155,13 +155,13 @@ def get_face_center_x(video_path, start_time, duration, original_width):
             x_coords.sort()
             median_x = x_coords[len(x_coords) // 2]
             print(f"🎯 [ArbiFlow Worker]: Face detected in {len(x_coords)}/{len(sample_times)} frames. Median X: {median_x:.1f}")
-            return int(median_x)
+            return int(median_x), True
             
         print("👤 [ArbiFlow Worker]: No faces detected in any frames. Falling back to center.")
-        return original_width // 2
+        return original_width // 2, False
     except Exception as e:
         print(f"⚠️ [ArbiFlow Worker]: Face detection failed: {e}")
-        return original_width // 2
+        return original_width // 2, False
 
 def download_file(url, dest):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -602,24 +602,33 @@ def handler(job):
                     ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                     
                     # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
-                    face_x = get_face_center_x(temp_extract_path, 0, end-start, width)
+                    face_x, face_found = get_face_center_x(temp_extract_path, 0, end-start, width)
                     
                     if width > height:
-                        # Горизонтальное видео -> Делаем "Подкаст формат" (Размытый фон + широкий кроп 4:3)
-                        # Это решает проблему "слишком близкого лица" и "обрезанных краев"
-                        crop_w = int(height * 4 / 3)
-                        if crop_w > width: crop_w = width
-                        if crop_w % 2 != 0: crop_w -= 1
-                        
-                        # Рассчитываем x_offset так, чтобы лицо было в центре широкого кропа
-                        x_offset = face_x - (crop_w // 2)
-                        x_offset = max(0, min(x_offset, width - crop_w))
-                        
-                        complex_filter = (
-                            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
-                            f"[0:v]crop={crop_w}:{height}:{x_offset}:0,scale=1080:-1[fg];"
-                            f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
-                        )
+                        if face_found:
+                            # Горизонтальное видео с лицом -> Делаем "Подкаст формат" (Размытый фон + широкий кроп 4:3)
+                            crop_w = int(height * 4 / 3)
+                            if crop_w > width: crop_w = width
+                            if crop_w % 2 != 0: crop_w -= 1
+                            
+                            # Рассчитываем x_offset так, чтобы лицо было в центре широкого кропа
+                            x_offset = face_x - (crop_w // 2)
+                            x_offset = max(0, min(x_offset, width - crop_w))
+                            
+                            complex_filter = (
+                                f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
+                                f"[0:v]crop={crop_w}:{height}:{x_offset}:0,scale=1080:-1[fg];"
+                                f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+                            )
+                        else:
+                            # Горизонтальное видео БЕЗ ЛИЦА (геймплей, фильм, анимация)
+                            # Просто вписываем видео по ширине в центр экрана (с черными/размытыми полосами)
+                            # Это сохранит весь контекст кадра, ничего не обрезая по бокам
+                            complex_filter = (
+                                f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
+                                f"[0:v]scale=1080:-1[fg];"
+                                f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+                            )
                         
                         # ШАГ 3: Финальный рендер с фильтром
                         ffmpeg.input(temp_extract_path).output(
