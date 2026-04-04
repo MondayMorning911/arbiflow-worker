@@ -40,12 +40,32 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'merge_output_format': 'mp4',
-        'extractor_args': {'youtube': ['player_client=android,web,tv']},
         'nocheckcertificate': True,
         'no_color': True,
         'youtube_skip_dash_manifest': True,
+        'cachedir': False,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     }
+    
+    # Check for cookies in root or cookies/ folder
+    cookies_content = None
+    cookies_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies")
+    cookies_file_default = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies.txt")
+    
+    if os.path.exists(cookies_dir) and os.path.isdir(cookies_dir):
+        import random
+        cookie_files = [f for f in os.listdir(cookies_dir) if f.endswith(".txt")]
+        if cookie_files:
+            selected_cookie = random.choice(cookie_files)
+            ydl_opts['cookiefile'] = os.path.join(cookies_dir, selected_cookie)
+            ydl_opts['extractor_args'] = {'youtube': ['player_client=web']}
+    
+    if 'cookiefile' not in ydl_opts and os.path.exists(cookies_file_default):
+        ydl_opts['cookiefile'] = cookies_file_default
+        ydl_opts['extractor_args'] = {'youtube': ['player_client=web']}
+        
+    if 'cookiefile' not in ydl_opts:
+        ydl_opts['extractor_args'] = {'youtube': ['player_client=android,web,tv']}
 
     def _download():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

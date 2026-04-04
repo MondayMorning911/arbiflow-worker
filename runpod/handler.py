@@ -374,15 +374,20 @@ def handler(job):
                     'quiet': True,
                     'no_warnings': True,
                     'merge_output_format': 'mp4',
-                    'extractor_args': {'youtube': ['player_client=android,web,tv']},
                     'nocheckcertificate': True,
                     'no_color': True,
                     'youtube_skip_dash_manifest': True,
+                    'cachedir': False,
                     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 }
                 
-                if cookies_path:
+                # Если куки есть, лучше не использовать специфические клиенты, которые могут конфликтовать
+                if not cookies_path:
+                    ydl_opts['extractor_args'] = {'youtube': ['player_client=android,web,tv']}
+                else:
                     ydl_opts['cookiefile'] = cookies_path
+                    # При использовании куки иногда помогает оставить только web клиент
+                    ydl_opts['extractor_args'] = {'youtube': ['player_client=web']}
 
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
