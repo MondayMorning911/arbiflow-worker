@@ -101,6 +101,19 @@ def init_face_detector():
     if face_detection_method is not None:
         return
         
+    # Сначала пробуем OpenCV (более стабилен по структурам данных)
+    try:
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        if os.path.exists(cascade_path):
+            cv2_face_cascade_instance = cv2.CascadeClassifier(cascade_path)
+            if not cv2_face_cascade_instance.empty():
+                face_detection_method = "opencv"
+                print("✅ [ArbiFlow Worker]: OpenCV face detection initialized (Primary).", flush=True)
+                return
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow Worker]: OpenCV initialization failed ({e}).", flush=True)
+
+    # MediaPipe как запасной вариант
     try:
         import mediapipe as mp
         try:
@@ -109,19 +122,13 @@ def init_face_detector():
             mp_fd = mp.solutions.face_detection
         mp_face_detection_instance = mp_fd.FaceDetection(model_selection=1, min_detection_confidence=0.5)
         face_detection_method = "mediapipe"
-        print("✅ [ArbiFlow Worker]: MediaPipe face detection initialized.", flush=True)
+        print("✅ [ArbiFlow Worker]: MediaPipe face detection initialized (Fallback).", flush=True)
         return
     except Exception as e:
-        print(f"⚠️ [ArbiFlow Worker]: MediaPipe initialization failed ({e}). Falling back to OpenCV.", flush=True)
+        print(f"⚠️ [ArbiFlow Worker]: MediaPipe initialization failed ({e}).", flush=True)
         
-    try:
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        cv2_face_cascade_instance = cv2.CascadeClassifier(cascade_path)
-        face_detection_method = "opencv"
-        print("✅ [ArbiFlow Worker]: OpenCV face detection initialized.", flush=True)
-    except Exception as e:
-        print(f"⚠️ [ArbiFlow Worker]: OpenCV initialization failed ({e}). Face detection disabled.", flush=True)
-        face_detection_method = "disabled"
+    face_detection_method = "disabled"
+    print("👤 [ArbiFlow Worker]: Face detection disabled (no engines available).", flush=True)
 
 def get_face_center_x(video_path, start_time, duration, original_width):
     try:
@@ -143,29 +150,29 @@ def get_face_center_x(video_path, start_time, duration, original_width):
             if t < 0: t = 0
             cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
             ret, frame = cap.read()
-            if not ret: continue
+            if not ret or frame is None: continue
             
+            # Сначала пробуем OpenCV, если он выбран
+            if face_detection_method == "opencv" and cv2_face_cascade_instance:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
+                if faces is not None and len(faces) > 0:
+                    faces_list = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
+                    x, y, w, h = faces_list[0]
+                    center_x = x + w / 2
+                    x_coords.append(center_x)
+                    continue # Нашли лицо через OpenCV, идем к следующему кадру
+
+            # Если OpenCV не нашел или не инициализирован, пробуем MediaPipe
             if face_detection_method == "mediapipe" and mp_face_detection_instance:
                 results = mp_face_detection_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                if results.detections:
-                    # Берем самое уверенное лицо
-                    # Добавляем проверку, что score не пустой
-                    valid_detections = [d for d in results.detections if hasattr(d, 'score') and len(d.score) > 0]
+                if results and results.detections:
+                    valid_detections = [d for d in results.detections if hasattr(d, 'score') and d.score and len(d.score) > 0]
                     if valid_detections:
                         best_detection = max(valid_detections, key=lambda d: d.score[0])
                         bbox = best_detection.location_data.relative_bounding_box
                         center_x = (bbox.xmin + bbox.width / 2) * original_width
                         x_coords.append(center_x)
-            elif face_detection_method == "opencv" and cv2_face_cascade_instance:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                # Увеличиваем minNeighbors до 6 и minSize, чтобы отсеять ложные срабатывания (одежду, фон)
-                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
-                if len(faces) > 0:
-                    # Берем самое большое лицо
-                    faces_list = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
-                    x, y, w, h = faces_list[0]
-                    center_x = x + w / 2
-                    x_coords.append(center_x)
         
         cap.release()
         
@@ -556,12 +563,13 @@ def handler(job):
             
             transcript = ""
             segments_list = list(segments)
+            
+            if not segments_list:
+                raise Exception("No speech segments detected in the video.")
+
             for segment in segments_list:
                 transcript += f"[{format_timestamp(segment.start)} - {format_timestamp(segment.end)}] {segment.text}\n"
             
-            if not transcript:
-                raise Exception("Transcript is empty. Could not detect speech.")
-                
             # 3. Multi-Pass Pipeline Analysis (Smart Chunking by Pauses)
             print(f"🧩 [ArbiFlow Worker]: Structuring transcript into semantic blocks by pauses...", flush=True)
             import concurrent.futures
@@ -569,10 +577,7 @@ def handler(job):
             blocks = []
             current_block_segs = []
             
-            if segments_list:
-                block_start_time = segments_list[0].start
-            else:
-                block_start_time = 0
+            block_start_time = segments_list[0].start
 
             MIN_BLOCK_DURATION = 120  # Минимальный блок 2 минуты
             MAX_BLOCK_DURATION = 420  # Максимальный блок 7 минут
