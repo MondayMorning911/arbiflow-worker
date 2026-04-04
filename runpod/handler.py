@@ -288,60 +288,6 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write(header)
         f.write("\n".join(lines))
 
-def download_via_cobalt(video_url, dest_path):
-    # Список актуальных и стабильных зеркал Cobalt на 2026 год
-    instances = [
-        "https://api.cobalt.tools/api/json",
-        "https://cobalt.sh/api/json",
-        "https://api.v0lume.me/api/json",
-        "https://api.cobalt.red/api/json",
-        "https://cobalt.hot-as-hell.club/api/json"
-    ]
-    
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    payload = {
-        "url": video_url,
-        "videoQuality": "1080",      # Правильный параметр: videoQuality
-        "filenameStyle": "basic",
-        "downloadMode": "video"
-    }
-
-    for api_url in instances:
-        try:
-            print(f"🌐 [ArbiFlow]: Пробую Cobalt: {api_url}", flush=True)
-            resp = requests.post(api_url, json=payload, headers=headers, timeout=25)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                # Cobalt может вернуть статус "stream", "redirect" или "picker"
-                if data.get("status") in ["stream", "redirect"]:
-                    direct_url = data.get("url")
-                    print(f"📥 [ArbiFlow]: Ссылка получена, начинаю скачивание...", flush=True)
-                    with requests.get(direct_url, stream=True, timeout=60) as r:
-                        r.raise_for_status()
-                        with open(dest_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=16384):
-                                f.write(chunk)
-                    print(f"✅ [ArbiFlow]: Видео успешно скачано через {api_url}", flush=True)
-                    return True
-                else:
-                    print(f"⚠️ [ArbiFlow]: Cobalt вернул статус {data.get('status')}: {data.get('text', 'No info')}", flush=True)
-            else:
-                try:
-                    err_msg = resp.json().get('text', resp.text)
-                except:
-                    err_msg = resp.text
-                print(f"⚠️ [ArbiFlow]: Инстанс {api_url} вернул код {resp.status_code}. Ошибка: {err_msg}", flush=True)
-        except Exception as e:
-            print(f"❌ [ArbiFlow]: Ошибка инстанса {api_url}: {e}", flush=True)
-            
-    return False
-
 def handler(job):
     job_id = job.get("id")
     job_input = job.get("input", {})
@@ -412,69 +358,65 @@ def handler(job):
             
             # 1. Download if URL
             if is_url:
-                print(f"📥 [ArbiFlow Worker]: Downloading video...", flush=True)
+                print(f"🚀 [ArbiFlow Worker]: Downloading video via verified Android-client...", flush=True)
                 
-                # Сначала пробуем Cobalt (он обходит блокировки лучше всего)
-                success = download_via_cobalt(video_url, input_video)
+                # --- УМНАЯ ПРОВЕРКА КУКОВ ---
+                cookies_content = job_input.get("cookies")
+                cookies_path = None
                 
-                if not success:
-                    print(f"⚠️ [ArbiFlow Worker]: Cobalt failed. Falling back to yt-dlp with cookies...", flush=True)
-                    # --- УМНАЯ ПРОВЕРКА КУКОВ ---
-                    cookies_content = job_input.get("cookies")
-                    cookies_path = None
-                    
-                    if cookies_content:
-                        # Если куки пришли в запросе от бота
-                        cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
-                        with open(cookies_path, "w") as f:
-                            f.write(cookies_content)
-                        print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
-                    else:
-                        # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
-                        local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
-                        # Также проверим в корне /app
-                        root_cookies = "/app/cookies.txt"
-                        
-                        if os.path.exists(local_cookies):
-                            cookies_path = local_cookies
-                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
-                        elif os.path.exists(root_cookies):
-                            cookies_path = root_cookies
-                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
-
-                    ydl_opts = {
-                        'format': 'bestvideo+bestaudio/best',
-                        'outtmpl': input_video,
-                        'quiet': True,
-                        'no_warnings': True,
-                        'merge_output_format': 'mp4',
-                        'nocheckcertificate': True,
-                        'no_color': True,
-                        'youtube_skip_dash_manifest': True,
-                        'cachedir': False,
-                        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    }
-                    
-                    if cookies_path:
-                        ydl_opts['cookiefile'] = cookies_path
-                        # При использовании куков лучше оставить только web или вообще не указывать, чтобы yt-dlp сам выбрал
-                        ydl_opts['extractor_args'] = {'youtube': ['player_client=web,ios']}
-                        print(f"✅ [ArbiFlow Worker]: Cookies applied to yt-dlp.", flush=True)
-                    else:
-                        print(f"⚠️ [ArbiFlow Worker]: NO COOKIES FOUND. YouTube might block download.", flush=True)
-                        ydl_opts['extractor_args'] = {'youtube': ['player_client=android,web,tv']}
-
-                    try:
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([video_url])
-                    finally:
-                        # Удаляем только временный файл, созданный из запроса
-                        if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
-                            try:
-                                os.remove(cookies_path)
-                            except: pass
+                if cookies_content:
+                    # Если куки пришли в запросе от бота
+                    cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
+                    with open(cookies_path, "w") as f:
+                        f.write(cookies_content)
+                    print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
                 else:
-                    print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Cobalt.", flush=True)
+                    # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
+                    local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
+                    # Также проверим в корне /app
+                    root_cookies = "/app/cookies.txt"
+                    
+                    if os.path.exists(local_cookies):
+                        cookies_path = local_cookies
+                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
+                    elif os.path.exists(root_cookies):
+                        cookies_path = root_cookies
+                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
+
+                ydl_opts = {
+                    'format': 'bestvideo+bestaudio/best',
+                    'outtmpl': input_video,
+                    'quiet': True,
+                    'no_warnings': True,
+                    'merge_output_format': 'mp4',
+                    'nocheckcertificate': True,
+                    'no_color': True,
+                    'youtube_skip_dash_manifest': True,
+                    'cachedir': False,
+                    # Настройки из успешного теста:
+                    'extractor_args': {
+                        'youtube': {
+                            'player_client': ['android'],
+                            'player_skip': ['web_embedded-player_mechanism']
+                        }
+                    },
+                    'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+                }
+                
+                if cookies_path:
+                    ydl_opts['cookiefile'] = cookies_path
+                    print(f"✅ [ArbiFlow Worker]: Cookies applied for extra auth.", flush=True)
+
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([video_url])
+                    print(f"✅ [ArbiFlow Worker]: Video downloaded successfully.", flush=True)
+                finally:
+                    # Удаляем только временный файл, созданный из запроса
+                    if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
+                        try:
+                            os.remove(cookies_path)
+                        except: pass
             
             # 2. Transcribe
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
