@@ -596,9 +596,9 @@ def handler(job):
                     width = int(v_stream['width'])
                     height = int(v_stream['height'])
                     
-                    # ШАГ 1: Быстро вырезаем кусок без перекодирования (stream copy), чтобы OpenCV не зависал на поиске кадров в 3-часовом видео
+                    # ШАГ 1: Быстро вырезаем кусок для OpenCV (используем x264, чтобы избежать проблем с AV1 и stream copy)
                     ffmpeg.input(input_video, ss=start, t=end-start).output(
-                        temp_extract_path, c='copy'
+                        temp_extract_path, vcodec='libx264', preset='ultrafast', crf=28
                     ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                     
                     # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
@@ -621,8 +621,8 @@ def handler(job):
                             f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
                         )
                         
-                        # ШАГ 3: Финальный рендер с фильтром
-                        ffmpeg.input(temp_extract_path).output(
+                        # ШАГ 3: Финальный рендер с фильтром напрямую из оригинального видео
+                        ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
                             filter_complex=complex_filter,
                             vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
@@ -630,7 +630,7 @@ def handler(job):
                     else:
                         # Уже вертикальное видео -> Просто подгоняем под 1080x1920
                         complex_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
-                        ffmpeg.input(temp_extract_path).output(
+                        ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
                             vf=complex_filter,
                             vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
