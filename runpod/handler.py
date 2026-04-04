@@ -289,47 +289,58 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write("\n".join(lines))
 
 def download_via_cobalt(video_url, dest_path):
-    # Список актуальных зеркал 2026
+    # Список актуальных и стабильных зеркал Cobalt на 2026 год
     instances = [
         "https://api.cobalt.tools/api/json",
-        "https://cobalt-api.v0lume.me/api/json",
-        "https://cobalt.meowing.de/api/json"
+        "https://cobalt.sh/api/json",
+        "https://api.v0lume.me/api/json",
+        "https://api.cobalt.red/api/json",
+        "https://cobalt.hot-as-hell.club/api/json"
     ]
     
     headers = {
         "Accept": "application/json",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     payload = {
         "url": video_url,
-        "vQuality": "1080",      # Качество 1080p
-        "filenameStyle": "basic" # Простое название файла
+        "videoQuality": "1080",      # Правильный параметр: videoQuality
+        "filenameStyle": "basic",
+        "downloadMode": "video"
     }
 
     for api_url in instances:
         try:
             print(f"🌐 [ArbiFlow]: Пробую Cobalt: {api_url}", flush=True)
-            resp = requests.post(api_url, json=payload, headers=headers, timeout=20)
+            resp = requests.post(api_url, json=payload, headers=headers, timeout=25)
             
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("status") == "stream":
-                    # Скачиваем файл по полученной прямой ссылке
+                # Cobalt может вернуть статус "stream", "redirect" или "picker"
+                if data.get("status") in ["stream", "redirect"]:
                     direct_url = data.get("url")
-                    with requests.get(direct_url, stream=True) as r:
+                    print(f"📥 [ArbiFlow]: Ссылка получена, начинаю скачивание...", flush=True)
+                    with requests.get(direct_url, stream=True, timeout=60) as r:
                         r.raise_for_status()
                         with open(dest_path, 'wb') as f:
-                            for chunk in r.iter_content(chunk_size=8192):
+                            for chunk in r.iter_content(chunk_size=16384):
                                 f.write(chunk)
                     print(f"✅ [ArbiFlow]: Видео успешно скачано через {api_url}", flush=True)
                     return True
+                else:
+                    print(f"⚠️ [ArbiFlow]: Cobalt вернул статус {data.get('status')}: {data.get('text', 'No info')}", flush=True)
             else:
-                print(f"⚠️ [ArbiFlow]: Инстанс {api_url} вернул код {resp.status_code}", flush=True)
+                try:
+                    err_msg = resp.json().get('text', resp.text)
+                except:
+                    err_msg = resp.text
+                print(f"⚠️ [ArbiFlow]: Инстанс {api_url} вернул код {resp.status_code}. Ошибка: {err_msg}", flush=True)
         except Exception as e:
             print(f"❌ [ArbiFlow]: Ошибка инстанса {api_url}: {e}", flush=True)
             
-    return False # Если все инстансы упали
+    return False
 
 def handler(job):
     job_id = job.get("id")
