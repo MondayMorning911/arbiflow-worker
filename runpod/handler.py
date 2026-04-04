@@ -149,18 +149,21 @@ def get_face_center_x(video_path, start_time, duration, original_width):
                 results = mp_face_detection_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
                 if results.detections:
                     # Берем самое уверенное лицо
-                    best_detection = max(results.detections, key=lambda d: d.score[0])
-                    bbox = best_detection.location_data.relative_bounding_box
-                    center_x = (bbox.xmin + bbox.width / 2) * original_width
-                    x_coords.append(center_x)
+                    # Добавляем проверку, что score не пустой
+                    valid_detections = [d for d in results.detections if hasattr(d, 'score') and len(d.score) > 0]
+                    if valid_detections:
+                        best_detection = max(valid_detections, key=lambda d: d.score[0])
+                        bbox = best_detection.location_data.relative_bounding_box
+                        center_x = (bbox.xmin + bbox.width / 2) * original_width
+                        x_coords.append(center_x)
             elif face_detection_method == "opencv" and cv2_face_cascade_instance:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 # Увеличиваем minNeighbors до 6 и minSize, чтобы отсеять ложные срабатывания (одежду, фон)
                 faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
                 if len(faces) > 0:
                     # Берем самое большое лицо
-                    faces = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
-                    x, y, w, h = faces[0]
+                    faces_list = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
+                    x, y, w, h = faces_list[0]
                     center_x = x + w / 2
                     x_coords.append(center_x)
         
@@ -782,8 +785,14 @@ def handler(job):
                 try:
                     probe = ffmpeg.probe(input_video)
                     v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+                    if not v_stream:
+                        raise Exception("No video stream found in the file.")
                     width = int(v_stream['width'])
                     height = int(v_stream['height'])
+                except Exception as e:
+                    print(f"⚠️ [ArbiFlow Worker]: FFmpeg probe failed for clip {i+1}: {e}", file=sys.stderr)
+                    # Fallback to standard 1080p if probe fails
+                    width, height = 1920, 1080
                     
                     # ШАГ 1: Быстро вырезаем кусок для OpenCV (используем x264, чтобы избежать проблем с AV1 и stream copy)
                     ffmpeg.input(input_video, ss=start, t=end-start).output(
