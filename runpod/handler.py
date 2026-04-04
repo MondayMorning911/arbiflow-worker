@@ -404,21 +404,23 @@ def handler(job):
 
             --------------------------------------------------
 
-            ВЫВОД СТРОГО В JSON:
+            ВЫВОД СТРОГО В ФОРМАТЕ JSON-ОБЪЕКТА (обязательно используй ключ "clips"):
 
-            [
-              {{
-                "content_type": "определённый тип",
-                "start_time": float,
-                "end_time": float,
-                "hook_text": "первые 5–12 слов фрагмента",
-                "cover_title": "короткий мощный заголовок для обложки (до 8 слов)",
-                "description_for_post": "2–3 предложения для описания под видео",
-                "viral_reason": "почему это удержит зрителя",
-                "emotion_trigger": "шок | конфликт | инсайт | драма | юмор | провокация",
-                "format_type": "сторителлинг | инсайт | обучение | конфликт | признание"
-              }}
-            ]
+            {{
+              "clips": [
+                {{
+                  "content_type": "определённый тип",
+                  "start_time": 15.5,
+                  "end_time": 45.0,
+                  "hook_text": "первые 5–12 слов фрагмента",
+                  "cover_title": "короткий мощный заголовок для обложки (до 8 слов)",
+                  "description_for_post": "2–3 предложения для описания под видео",
+                  "viral_reason": "почему это удержит зрителя",
+                  "emotion_trigger": "шок | конфликт | инсайт | драма | юмор | провокация",
+                  "format_type": "сторителлинг | инсайт | обучение | конфликт | признание"
+                }}
+              ]
+            }}
 
             Никакого текста вне JSON.
             """
@@ -451,16 +453,41 @@ def handler(job):
                 
                 clips_data = json.loads(content)
                 
-                # If DeepSeek returns an object with a key like "clips" or "segments", extract it
+                # Улучшенный парсинг: ищем массив внутри объекта
                 if isinstance(clips_data, dict):
-                    for key in ["clips", "segments", "viral_segments"]:
-                        if key in clips_data:
+                    extracted = False
+                    # Проверяем известные ключи
+                    for key in ["clips", "segments", "viral_segments", "fragments", "data"]:
+                        if key in clips_data and isinstance(clips_data[key], list):
                             clips_data = clips_data[key]
+                            extracted = True
                             break
+                    
+                    # Если не нашли по ключам, берем первый попавшийся массив
+                    if not extracted:
+                        for key, value in clips_data.items():
+                            if isinstance(value, list):
+                                clips_data = value
+                                extracted = True
+                                break
+                                
+                    # Если массивов нет вообще, оборачиваем сам объект в список
+                    if not extracted:
+                        clips_data = [clips_data]
                 
                 if not isinstance(clips_data, list):
-                    # Fallback if it's still not a list
-                    clips_data = [clips_data] if isinstance(clips_data, dict) else []
+                    clips_data = []
+                    
+                # Фильтруем только валидные клипы (где есть start_time)
+                valid_clips = []
+                for clip in clips_data:
+                    if 'start_time' in clip and 'end_time' in clip:
+                        valid_clips.append(clip)
+                    elif 'start' in clip and 'end' in clip:
+                        clip['start_time'] = clip['start']
+                        clip['end_time'] = clip['end']
+                        valid_clips.append(clip)
+                clips_data = valid_clips
                 
             except Exception as e:
                 print(f"❌ [ArbiFlow Worker]: DeepSeek Error: {str(e)}", flush=True)
