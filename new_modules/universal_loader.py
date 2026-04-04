@@ -25,13 +25,61 @@ async def download_tiktok_fallback(url: str, output_dir: str, file_id: str) -> s
                             return output_path
             raise Exception("TikTok fallback API failed to extract video.")
 
+async def download_via_cobalt(video_url: str, output_dir: str, file_id: str) -> str:
+    """
+    Downloads a video using Cobalt API instances.
+    """
+    instances = [
+        "https://api.cobalt.tools/api/json",
+        "https://cobalt-api.v0lume.me/api/json",
+        "https://cobalt.meowing.de/api/json"
+    ]
+    
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "url": video_url,
+        "vQuality": "1080",
+        "filenameStyle": "basic"
+    }
+
+    async with aiohttp.ClientSession() as session:
+        for api_url in instances:
+            try:
+                async with session.post(api_url, json=payload, headers=headers, timeout=20) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("status") == "stream":
+                            direct_url = data.get("url")
+                            output_path = os.path.join(output_dir, f"{file_id}.mp4")
+                            async with session.get(direct_url) as video_resp:
+                                if video_resp.status == 200:
+                                    with open(output_path, "wb") as f:
+                                        f.write(await video_resp.read())
+                                    return output_path
+            except Exception:
+                continue
+    return None
+
 async def download_video_ytdlp(url: str, output_dir: str) -> str:
     """
-    Downloads a video from a given URL using yt-dlp.
+    Downloads a video from a given URL using Cobalt (primary) or yt-dlp (fallback).
     Returns the path to the downloaded video file.
     """
     os.makedirs(output_dir, exist_ok=True)
     file_id = str(uuid.uuid4())
+    
+    # Try Cobalt first
+    try:
+        cobalt_path = await download_via_cobalt(url, output_dir, file_id)
+        if cobalt_path:
+            return cobalt_path
+    except Exception:
+        pass
+
     output_template = os.path.join(output_dir, f"{file_id}.%(ext)s")
 
     ydl_opts = {
