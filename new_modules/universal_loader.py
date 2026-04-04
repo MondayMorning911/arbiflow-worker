@@ -45,6 +45,7 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
         'no_color': True,
         'youtube_skip_dash_manifest': True,
         'cachedir': False,
+        'concurrent_fragment_downloads': 10,
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
@@ -53,6 +54,15 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
         },
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
+    
+    # Try to enable aria2c for faster downloads
+    try:
+        import subprocess
+        subprocess.run(['aria2c', '--version'], capture_output=True, check=True)
+        ydl_opts['external_downloader'] = 'aria2c'
+        ydl_opts['external_downloader_args'] = ['-x', '16', '-s', '16', '-k', '1M']
+    except:
+        pass
     
     # Check for cookies in root or cookies/ folder
     cookies_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cookies")

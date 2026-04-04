@@ -343,14 +343,46 @@ def download_via_rapidapi(video_url, dest_path):
             print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано качество: {items[0].get('quality')}", flush=True)
 
         # 3. Загрузка файла на RunPod
-        print(f"📥 [ArbiFlow]: Начинаю прямую загрузку в {dest_path}...", flush=True)
-        with requests.get(final_link, stream=True) as r:
-            r.raise_for_status()
-            with open(dest_path, 'wb') as f:
-                # Качаем кусками по 1МБ, чтобы не забивать оперативку
-                for chunk in r.iter_content(chunk_size=1024*1024): 
-                    if chunk:
-                        f.write(chunk)
+        print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
+        
+        # Пытаемся использовать aria2c для многопоточного скачивания (максимальная скорость)
+        download_success = False
+        try:
+            import subprocess
+            # Проверяем наличие aria2c
+            subprocess.run(['aria2c', '--version'], capture_output=True, check=True)
+            
+            print(f"🚀 [ArbiFlow]: Использование aria2c для многопоточного скачивания (16 потоков)...", flush=True)
+            # -x16 (соединений на сервер), -s16 (частей на файл), -k1M (минимальный размер части)
+            cmd = [
+                'aria2c', 
+                '-x', '16', 
+                '-s', '16', 
+                '-j', '16', 
+                '-k', '1M',
+                '--file-allocation=none', 
+                '--summary-interval=0',
+                '--check-certificate=false',
+                '--retry-wait=2',
+                '--max-tries=5',
+                '-o', os.path.basename(dest_path),
+                '-d', os.path.dirname(dest_path),
+                final_link
+            ]
+            subprocess.run(cmd, check=True, capture_output=True)
+            download_success = True
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: aria2c недоступен или произошла ошибка, использую стандартный метод. ({e})", flush=True)
+            
+        if not download_success:
+            # Стандартный метод (fallback)
+            with requests.get(final_link, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(dest_path, 'wb') as f:
+                    # Качаем кусками по 1МБ
+                    for chunk in r.iter_content(chunk_size=1024*1024): 
+                        if chunk:
+                            f.write(chunk)
         
         # Проверка, что файл реально создался и не пустой
         if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
@@ -476,6 +508,7 @@ def handler(job):
                         'no_color': True,
                         'youtube_skip_dash_manifest': True,
                         'cachedir': False,
+                        'concurrent_fragment_downloads': 10,
                         # Настройки из успешного теста:
                         'extractor_args': {
                             'youtube': {
@@ -485,6 +518,16 @@ def handler(job):
                         },
                         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
+                    
+                    # Пытаемся добавить aria2c в yt-dlp для ускорения фрагментов
+                    try:
+                        import subprocess
+                        subprocess.run(['aria2c', '--version'], capture_output=True, check=True)
+                        ydl_opts['external_downloader'] = 'aria2c'
+                        ydl_opts['external_downloader_args'] = ['-x', '16', '-s', '16', '-k', '1M']
+                        print(f"🚀 [ArbiFlow Worker]: Aria2c enabled for yt-dlp fallback.", flush=True)
+                    except:
+                        pass
                     
                     if cookies_path:
                         ydl_opts['cookiefile'] = cookies_path
