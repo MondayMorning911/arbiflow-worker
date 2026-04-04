@@ -829,63 +829,64 @@ def handler(job):
                 
                 print(f"🎬 [ArbiFlow Worker]: Processing clip {i+1}: {start}s - {end}s", flush=True)
                 try:
-                    probe = ffmpeg.probe(input_video)
-                    v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
-                    if not v_stream:
-                        raise Exception("No video stream found in the file.")
-                    width = int(v_stream['width'])
-                    height = int(v_stream['height'])
-                except Exception as e:
-                    print(f"⚠️ [ArbiFlow Worker]: FFmpeg probe failed for clip {i+1}: {e}", file=sys.stderr)
-                    # Fallback to standard 1080p if probe fails
-                    width, height = 1920, 1080
-                    
-                # ШАГ 1: Быстро вырезаем кусок для OpenCV (используем x264, чтобы избежать проблем с AV1 и stream copy)
-                ffmpeg.input(input_video, ss=start, t=end-start).output(
-                    temp_extract_path, vcodec='libx264', preset='ultrafast', crf=28
-                ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
-                
-                # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
-                face_x = get_face_center_x(temp_extract_path, 0, end-start, width)
-                
-                if width > height:
-                    # Горизонтальное видео -> Делаем "Подкаст формат" (Размытый фон + широкий кроп 4:3)
-                    # Это решает проблему "слишком близкого лица" и "обрезанных краев"
-                    crop_w = int(height * 4 / 3)
-                    if crop_w > width: crop_w = width
-                    if crop_w % 2 != 0: crop_w -= 1
-                    
-                    # Рассчитываем x_offset так, чтобы лицо было в центре широкого кропа
-                    x_offset = face_x - (crop_w // 2)
-                    x_offset = max(0, min(x_offset, width - crop_w))
-                    
-                    complex_filter = (
-                        f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
-                        f"[0:v]crop={crop_w}:{height}:{x_offset}:0,scale=1080:-1[fg];"
-                        f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
-                    )
-                    
-                    # ШАГ 3: Финальный рендер с фильтром напрямую из оригинального видео
+                    try:
+                        probe = ffmpeg.probe(input_video)
+                        v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+                        if not v_stream:
+                            raise Exception("No video stream found in the file.")
+                        width = int(v_stream['width'])
+                        height = int(v_stream['height'])
+                    except Exception as e:
+                        print(f"⚠️ [ArbiFlow Worker]: FFmpeg probe failed for clip {i+1}: {e}", file=sys.stderr)
+                        # Fallback to standard 1080p if probe fails
+                        width, height = 1920, 1080
+                        
+                    # ШАГ 1: Быстро вырезаем кусок для OpenCV (используем x264, чтобы избежать проблем с AV1 и stream copy)
                     ffmpeg.input(input_video, ss=start, t=end-start).output(
-                        clip_path,
-                        filter_complex=complex_filter,
-                        vcodec='libx264', acodec='aac', preset='fast', crf=18
+                        temp_extract_path, vcodec='libx264', preset='ultrafast', crf=28
                     ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
-                else:
-                    # Уже вертикальное видео -> Просто подгоняем под 1080x1920
-                    complex_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
-                    ffmpeg.input(input_video, ss=start, t=end-start).output(
-                        clip_path,
-                        vf=complex_filter,
-                        vcodec='libx264', acodec='aac', preset='fast', crf=18
-                    ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
-                
-                # Удаляем временный файл
-                if os.path.exists(temp_extract_path):
-                    os.remove(temp_extract_path)
                     
-                desc = f"🎬 {i+1}.mp4 [{emotion_type}] - {cover_title}\n📝 Тема: {scene_topic}\n🔥 Оценка: {viral_score}/10\n💡 Почему залетит: {viral_reason}\n"
-                return clip_path, clip_filename, desc, i
+                    # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
+                    face_x = get_face_center_x(temp_extract_path, 0, end-start, width)
+                    
+                    if width > height:
+                        # Горизонтальное видео -> Делаем "Подкаст формат" (Размытый фон + широкий кроп 4:3)
+                        # Это решает проблему "слишком близкого лица" и "обрезанных краев"
+                        crop_w = int(height * 4 / 3)
+                        if crop_w > width: crop_w = width
+                        if crop_w % 2 != 0: crop_w -= 1
+                        
+                        # Рассчитываем x_offset так, чтобы лицо было в центре широкого кропа
+                        x_offset = face_x - (crop_w // 2)
+                        x_offset = max(0, min(x_offset, width - crop_w))
+                        
+                        complex_filter = (
+                            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
+                            f"[0:v]crop={crop_w}:{height}:{x_offset}:0,scale=1080:-1[fg];"
+                            f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+                        )
+                        
+                        # ШАГ 3: Финальный рендер с фильтром напрямую из оригинального видео
+                        ffmpeg.input(input_video, ss=start, t=end-start).output(
+                            clip_path,
+                            filter_complex=complex_filter,
+                            vcodec='libx264', acodec='aac', preset='fast', crf=18
+                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    else:
+                        # Уже вертикальное видео -> Просто подгоняем под 1080x1920
+                        complex_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+                        ffmpeg.input(input_video, ss=start, t=end-start).output(
+                            clip_path,
+                            vf=complex_filter,
+                            vcodec='libx264', acodec='aac', preset='fast', crf=18
+                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    
+                    # Удаляем временный файл
+                    if os.path.exists(temp_extract_path):
+                        os.remove(temp_extract_path)
+                        
+                    desc = f"🎬 {i+1}.mp4 [{emotion_type}] - {cover_title}\n📝 Тема: {scene_topic}\n🔥 Оценка: {viral_score}/10\n💡 Почему залетит: {viral_reason}\n"
+                    return clip_path, clip_filename, desc, i
                 except Exception as e:
                     print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                     if os.path.exists(temp_extract_path):
