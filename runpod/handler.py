@@ -575,56 +575,80 @@ def handler(job):
             descriptions = []
             
             print(f"✂️ [ArbiFlow Worker]: Creating ZIP and processing clips...", flush=True)
+            
+            def process_clip(i, clip):
+                start = clip['start_time']
+                end = clip['end_time']
+                cover_title = clip.get('cover_title', 'Viral Clip')
+                scene_topic = clip.get('scene_topic', '')
+                viral_reason = clip.get('viral_reason', '')
+                viral_score = clip.get('viral_score', 10)
+                emotion_type = clip.get('emotion_type', 'Shorts')
+                
+                clip_filename = f"clip_{i+1}.mp4"
+                clip_path = os.path.join(TEMP_PATH, clip_filename)
+                temp_extract_path = os.path.join(TEMP_PATH, f"temp_extract_{i+1}.mp4")
+                
+                print(f"🎬 [ArbiFlow Worker]: Processing clip {i+1}: {start}s - {end}s", flush=True)
+                try:
+                    probe = ffmpeg.probe(input_video)
+                    v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
+                    width = int(v_stream['width'])
+                    height = int(v_stream['height'])
+                    
+                    # ШАГ 1: Быстро вырезаем кусок без перекодирования (stream copy), чтобы OpenCV не зависал на поиске кадров в 3-часовом видео
+                    ffmpeg.input(input_video, ss=start, t=end-start).output(
+                        temp_extract_path, c='copy'
+                    ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    
+                    # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
+                    face_x = get_face_center_x(temp_extract_path, 0, end-start, width)
+                    
+                    # libx264 требует четные размеры (делимые на 2)
+                    crop_w = int(height * 9 / 16)
+                    if crop_w % 2 != 0: crop_w -= 1
+                    
+                    target_h = min(height, 1080)
+                    if target_h % 2 != 0: target_h -= 1
+                    
+                    target_w = int(target_h * 9 / 16)
+                    if target_w % 2 != 0: target_w -= 1
+                    
+                    # Рассчитываем x_offset так, чтобы лицо было в центре
+                    x_offset = face_x - (crop_w // 2)
+                    # Ограничиваем, чтобы не выйти за края видео
+                    x_offset = max(0, min(x_offset, width - crop_w))
+                    
+                    # ШАГ 3: Финальный рендер с кропом
+                    ffmpeg.input(temp_extract_path).output(
+                        clip_path,
+                        vf=f"crop={crop_w}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
+                        vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
+                    ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    
+                    # Удаляем временный файл
+                    if os.path.exists(temp_extract_path):
+                        os.remove(temp_extract_path)
+                        
+                    desc = f"🎬 {i+1}.mp4 [{emotion_type}] - {cover_title}\n📝 Тема: {scene_topic}\n🔥 Оценка: {viral_score}/10\n💡 Почему залетит: {viral_reason}\n"
+                    return clip_path, clip_filename, desc
+                except Exception as e:
+                    print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
+                    if os.path.exists(temp_extract_path):
+                        try: os.remove(temp_extract_path)
+                        except: pass
+                    return None, None, None
+
             with zipfile.ZipFile(output_zip, 'w') as zipf:
-                for i, clip in enumerate(clips_data):
-                    start = clip['start_time']
-                    end = clip['end_time']
-                    cover_title = clip.get('cover_title', 'Viral Clip')
-                    scene_topic = clip.get('scene_topic', '')
-                    viral_reason = clip.get('viral_reason', '')
-                    viral_score = clip.get('viral_score', 10)
-                    emotion_type = clip.get('emotion_type', 'Shorts')
-                    
-                    clip_filename = f"clip_{i+1}.mp4"
-                    clip_path = os.path.join(TEMP_PATH, clip_filename)
-                    cleanup_list.append(clip_path)
-                    
-                    print(f"🎬 [ArbiFlow Worker]: Processing clip {i+1}: {start}s - {end}s", flush=True)
-                    # Умный кроп (поиск лица)
-                    try:
-                        probe = ffmpeg.probe(input_video)
-                        v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
-                        width = int(v_stream['width'])
-                        height = int(v_stream['height'])
-                        
-                        # Находим центр лица
-                        face_x = get_face_center_x(input_video, start, end-start, width)
-                        
-                        # libx264 требует четные размеры (делимые на 2)
-                        crop_w = int(height * 9 / 16)
-                        if crop_w % 2 != 0: crop_w -= 1
-                        
-                        target_h = min(height, 1080)
-                        if target_h % 2 != 0: target_h -= 1
-                        
-                        target_w = int(target_h * 9 / 16)
-                        if target_w % 2 != 0: target_w -= 1
-                        
-                        # Рассчитываем x_offset так, чтобы лицо было в центре
-                        x_offset = face_x - (crop_w // 2)
-                        # Ограничиваем, чтобы не выйти за края видео
-                        x_offset = max(0, min(x_offset, width - crop_w))
-                        
-                        ffmpeg.input(input_video, ss=start, t=end-start).output(
-                            clip_path,
-                            vf=f"crop={crop_w}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
-                            vcodec='libx264', acodec='aac', preset='fast', crf=26
-                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
-                        
-                        zipf.write(clip_path, arcname=clip_filename)
-                        descriptions.append(f"🎬 {i+1}.mp4 [{emotion_type}] - {cover_title}\n📝 Тема: {scene_topic}\n🔥 Оценка: {viral_score}/10\n💡 Почему залетит: {viral_reason}\n")
-                    except Exception as e:
-                        print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
+                # Запускаем обработку клипов параллельно (до 3 потоков, чтобы не перегрузить CPU/RAM)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    futures = [executor.submit(process_clip, i, clip) for i, clip in enumerate(clips_data)]
+                    for future in concurrent.futures.as_completed(futures):
+                        clip_path, clip_filename, desc = future.result()
+                        if clip_path and os.path.exists(clip_path):
+                            zipf.write(clip_path, arcname=clip_filename)
+                            descriptions.append(desc)
+                            cleanup_list.append(clip_path)
                         
                 # Add descriptions.txt
                 desc_path = os.path.join(TEMP_PATH, "descriptions.txt")
