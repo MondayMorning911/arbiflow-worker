@@ -360,13 +360,28 @@ def handler(job):
             if is_url:
                 print(f"📥 [ArbiFlow Worker]: Downloading video via yt-dlp...", flush=True)
                 
+                # --- УМНАЯ ПРОВЕРКА КУКОВ ---
                 cookies_content = job_input.get("cookies")
                 cookies_path = None
+                
                 if cookies_content:
+                    # Если куки пришли в запросе от бота
                     cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
                     with open(cookies_path, "w") as f:
                         f.write(cookies_content)
-                    print(f"🍪 [ArbiFlow Worker]: Using provided cookies.", flush=True)
+                    print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
+                else:
+                    # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
+                    local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
+                    # Также проверим в корне /app
+                    root_cookies = "/app/cookies.txt"
+                    
+                    if os.path.exists(local_cookies):
+                        cookies_path = local_cookies
+                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
+                    elif os.path.exists(root_cookies):
+                        cookies_path = root_cookies
+                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
 
                 ydl_opts = {
                     'format': 'bestvideo+bestaudio/best',
@@ -381,20 +396,24 @@ def handler(job):
                     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 }
                 
-                # Если куки есть, лучше не использовать специфические клиенты, которые могут конфликтовать
-                if not cookies_path:
-                    ydl_opts['extractor_args'] = {'youtube': ['player_client=android,web,tv']}
-                else:
+                if cookies_path:
                     ydl_opts['cookiefile'] = cookies_path
-                    # При использовании куки иногда помогает оставить только web клиент
-                    ydl_opts['extractor_args'] = {'youtube': ['player_client=web']}
+                    # При использовании куков лучше оставить только web или вообще не указывать, чтобы yt-dlp сам выбрал
+                    ydl_opts['extractor_args'] = {'youtube': ['player_client=web,ios']}
+                    print(f"✅ [ArbiFlow Worker]: Cookies applied to yt-dlp.", flush=True)
+                else:
+                    print(f"⚠️ [ArbiFlow Worker]: NO COOKIES FOUND. YouTube might block download.", flush=True)
+                    ydl_opts['extractor_args'] = {'youtube': ['player_client=android,web,tv']}
 
                 try:
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         ydl.download([video_url])
                 finally:
-                    if cookies_path and os.path.exists(cookies_path):
-                        os.remove(cookies_path)
+                    # Удаляем только временный файл, созданный из запроса
+                    if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
+                        try:
+                            os.remove(cookies_path)
+                        except: pass
             
             # 2. Transcribe
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
