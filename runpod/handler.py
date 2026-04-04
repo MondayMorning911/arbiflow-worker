@@ -289,38 +289,62 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write("\n".join(lines))
 
 def download_via_rapidapi(video_url, dest_path):
-    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/downloadVideo"
+    # Исправленный эндпоинт для этого API
+    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/dl"
     headers = {
         "x-rapidapi-key": "a46b139ademsh2c7c294d619b0a2p1015bajsnb930db830785",
         "x-rapidapi-host": "yt-video-audio-downloader-api.p.rapidapi.com",
         "Content-Type": "application/json"
     }
+    # Параметры для 2K качества
     payload = {
-        "url": video_url,
-        "format": "mp4"
+        "id": video_url,
+        "type": "video",
+        "quality": "1440" 
     }
     
     try:
-        print(f"🌐 [ArbiFlow]: Requesting RapidAPI download for {video_url}", flush=True)
-        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        print(f"🌐 [ArbiFlow]: Requesting RapidAPI (2K target) for {video_url}", flush=True)
+        # Некоторые API требуют GET, некоторые POST. Пробуем универсально.
+        response = requests.get(api_url, params=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 404 or response.status_code == 405:
+            # Если GET не прошел, пробуем POST
+            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+
         if response.status_code == 200:
             data = response.json()
-            # Проверяем разные варианты ключей в ответе (зависит от версии API)
-            download_url = data.get("url") or data.get("link") or data.get("downloadUrl")
             
-            if not download_url and "data" in data:
-                download_url = data["data"].get("url") or data["data"].get("link")
-
+            # 1. Если API вернуло прямую ссылку сразу
+            download_url = data.get("link") or data.get("url") or data.get("downloadUrl")
+            
+            # 2. Если API работает через Job (нужно подождать)
+            job_id = data.get("jobId")
+            if not download_url and job_id:
+                print(f"⏳ [ArbiFlow]: Job created ({job_id}). Waiting for conversion...", flush=True)
+                status_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/status"
+                for _ in range(15): # Ждем до 150 секунд
+                    time.sleep(10)
+                    s_resp = requests.get(status_url, params={"jobId": job_id}, headers=headers)
+                    if s_resp.status_code == 200:
+                        s_data = s_resp.json()
+                        if s_data.get("status") == "completed":
+                            download_url = s_data.get("link") or s_data.get("url")
+                            break
+                        elif s_data.get("status") == "failed":
+                            print(f"❌ [ArbiFlow]: RapidAPI Job failed.", flush=True)
+                            break
+            
             if download_url:
-                print(f"📥 [ArbiFlow]: RapidAPI link obtained. Downloading...", flush=True)
-                with requests.get(download_url, stream=True, timeout=120) as r:
+                print(f"📥 [ArbiFlow]: Link obtained. Downloading 1080p/2K video...", flush=True)
+                with requests.get(download_url, stream=True, timeout=300) as r:
                     r.raise_for_status()
                     with open(dest_path, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=16384):
+                        for chunk in r.iter_content(chunk_size=32768):
                             f.write(chunk)
                 return True
             else:
-                print(f"⚠️ [ArbiFlow]: RapidAPI response missing URL: {data}", flush=True)
+                print(f"⚠️ [ArbiFlow]: RapidAPI could not provide a link. Response: {data}", flush=True)
         else:
             print(f"⚠️ [ArbiFlow]: RapidAPI error {response.status_code}: {response.text}", flush=True)
     except Exception as e:
@@ -429,7 +453,7 @@ def handler(job):
                             print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
 
                     ydl_opts = {
-                        'format': 'bestvideo+bestaudio/best',
+                        'format': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
                         'outtmpl': input_video,
                         'quiet': True,
                         'no_warnings': True,
