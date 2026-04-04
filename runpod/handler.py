@@ -87,8 +87,12 @@ def get_face_center_x(video_path, start_time, duration, original_width):
     try:
         detector = get_face_detector()
         cap = cv2.VideoCapture(video_path)
-        # Проверяем кадры в начале, середине и конце клипа
-        sample_times = [start_time + 1, start_time + duration/2, start_time + duration - 1]
+        
+        # Берем кадры каждые 2 секунды для более точного отслеживания
+        sample_interval = 2.0
+        num_samples = max(3, int(duration / sample_interval))
+        sample_times = [start_time + i * (duration / num_samples) for i in range(num_samples)]
+        
         x_coords = []
         
         for t in sample_times:
@@ -99,13 +103,22 @@ def get_face_center_x(video_path, start_time, duration, original_width):
             
             results = detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
             if results.detections:
-                bbox = results.detections[0].location_data.relative_bounding_box
+                # Берем самое уверенное лицо
+                best_detection = max(results.detections, key=lambda d: d.score[0])
+                bbox = best_detection.location_data.relative_bounding_box
                 center_x = (bbox.xmin + bbox.width / 2) * original_width
                 x_coords.append(center_x)
         
         cap.release()
+        
         if x_coords:
-            return int(sum(x_coords) / len(x_coords))
+            # Используем медиану, чтобы исключить резкие движения или ошибки детекции
+            x_coords.sort()
+            median_x = x_coords[len(x_coords) // 2]
+            print(f"🎯 [ArbiFlow Worker]: Face detected in {len(x_coords)}/{len(sample_times)} frames. Median X: {median_x:.1f}")
+            return int(median_x)
+            
+        print("👤 [ArbiFlow Worker]: No faces detected in any frames. Falling back to center.")
         return original_width // 2
     except Exception as e:
         print(f"⚠️ [ArbiFlow Worker]: Face detection failed: {e}")
@@ -317,31 +330,97 @@ def handler(job):
             print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with DeepSeek...", flush=True)
             
             prompt = f"""
-            Ты — профессиональный эксперт по виральному сторителлингу. Твоя задача: найти в предоставленном тексте 3 фрагмента с самым высоким потенциалом удержания (retention).
+            Ты — профессиональный редактор вирусных коротких видео (TikTok, Reels, Shorts).
+            Ты превращаешь длинные YouTube-видео в самостоятельные клипы,
+            которые можно сразу публиковать.
 
-            ЭТО МОЖЕТ БЫТЬ:
-            1. **Curiosity Gap (Разрыв любопытства):** Фрагмент начинается с чего-то непонятного или интригующего, что заставляет дослушать до конца.
-            2. **Emotional/Action Peak:** Момент наивысшего напряжения, самой глубокой мысли или самого смешного момента.
-            3. **Standalone Value:** Кусок, который понятен без контекста всего видео и несет в себе законченную мини-историю или инсайт.
-            4. **The Hook:** Первые 2-3 секунды фрагмента должны содержать мощный визуальный или смысловой "зацеп".
+            Твоя задача — найти 3 САМЫХ сильных фрагмента.
 
-            ТЕХНИЧЕСКИЕ ПРАВИЛА:
-            - Длительность: 20-55 секунд.
-            - Обязательно: логическое завершение фразы.
-            - Формат: Строгий JSON на русском языке.
+            --------------------------------------------------
+            ШАГ 1. Определи тип контента:
+            - подкаст
+            - интервью
+            - образовательный
+            - развлекательный
+            - реакция
+            - личная история
+            - другое
+
+            Адаптируй стратегию поиска под тип.
+
+            --------------------------------------------------
+            ШАГ 2. Найди 3 вирусных фрагмента.
+
+            ⚠️ КРИТИЧЕСКОЕ ПРАВИЛО:
+            Фрагмент должен быть ЦЕЛЬНОЙ МИНИ-ИСТОРИЕЙ.
+
+            Каждый фрагмент обязан содержать:
+            1. Хук (сильное начало в первые 3–5 секунд)
+            2. Развитие мысли / конфликт / нарастающее напряжение
+            3. Кульминацию или главный инсайт
+            4. Логическое завершение
+
+            Если нет всех 4 элементов — фрагмент НЕ подходит.
+
+            Запрещено:
+            - начинать с середины предложения
+            - заканчивать на незавершённой мысли
+            - выбирать куски без контекста
+            - брать просто «интересная фразу»
+
+            --------------------------------------------------
+            КРИТЕРИИ ВИРУСНОСТИ (по приоритету):
+
+            1. Сильная эмоция (шок, страх, злость, восторг)
+            2. Конфликт или провокация
+            3. Неожиданный поворот
+            4. Личный опыт с выводом
+            5. Практический инсайт
+            6. Потенциал вызвать комментарии
+
+            --------------------------------------------------
+            ТЕХНИЧЕСКИЕ ТРЕБОВАНИЯ:
+
+            - Длительность: 25–55 секунд
+            - Понятен без просмотра всего видео
+            - Самодостаточный смысл
+            - Законченная мысль
+
+            --------------------------------------------------
+            SELF-CHECK (обязательно перед финальным выбором):
+
+            Спроси себя:
+            - Захочу ли я досмотреть это до конца?
+            - Есть ли здесь напряжение?
+            - Есть ли завершённость?
+            Если нет — исключи фрагмент.
+
+            Если в видео нет сильных фрагментов — верни [].
+
+            --------------------------------------------------
 
             ТРАНСКРИПТ:
             {transcript}
 
-            ВЫДАЙ JSON:
+            --------------------------------------------------
+
+            ВЫВОД СТРОГО В JSON:
+
             [
               {{
+                "content_type": "определённый тип",
                 "start_time": float,
                 "end_time": float,
-                "description": "Краткое описание (hook) для обложки",
-                "format_type": "Тип контента (инсайт, юмор, драма, обучение)"
+                "hook_text": "первые 5–12 слов фрагмента",
+                "cover_title": "короткий мощный заголовок для обложки (до 8 слов)",
+                "description_for_post": "2–3 предложения для описания под видео",
+                "viral_reason": "почему это удержит зрителя",
+                "emotion_trigger": "шок | конфликт | инсайт | драма | юмор | провокация",
+                "format_type": "сторителлинг | инсайт | обучение | конфликт | признание"
               }}
             ]
+
+            Никакого текста вне JSON.
             """
             
             try:
@@ -352,7 +431,7 @@ def handler(job):
                 payload = {
                     "model": "deepseek-chat",
                     "messages": [
-                        {"role": "system", "content": "You are a viral content expert. Respond ONLY with valid JSON in Russian."},
+                        {"role": "system", "content": "You are a professional viral video editor. Respond ONLY with valid JSON in Russian."},
                         {"role": "user", "content": prompt}
                     ],
                     "response_format": {"type": "json_object"}
@@ -400,7 +479,9 @@ def handler(job):
                 for i, clip in enumerate(clips_data):
                     start = clip['start_time']
                     end = clip['end_time']
-                    desc = clip['description']
+                    cover_title = clip.get('cover_title', 'Viral Clip')
+                    post_desc = clip.get('description_for_post', '')
+                    format_type = clip.get('format_type', 'Shorts')
                     
                     clip_filename = f"clip_{i+1}.mp4"
                     clip_path = os.path.join(TEMP_PATH, clip_filename)
@@ -439,8 +520,7 @@ def handler(job):
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                         
                         zipf.write(clip_path, arcname=clip_filename)
-                        format_type = clip.get('format_type', 'Shorts')
-                        descriptions.append(f"🎬 {i+1}.mp4 [{format_type}] - {desc}")
+                        descriptions.append(f"🎬 {i+1}.mp4 [{format_type}] - {cover_title}\n📝 Описание: {post_desc}\n")
                     except Exception as e:
                         print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                         
