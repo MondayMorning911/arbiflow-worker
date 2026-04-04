@@ -353,10 +353,11 @@ def handler(job):
                     print(f"🍪 [ArbiFlow Worker]: Using provided cookies.", flush=True)
 
                 ydl_opts = {
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'format': 'bestvideo+bestaudio/best',
                     'outtmpl': input_video,
                     'quiet': True,
                     'no_warnings': True,
+                    'merge_output_format': 'mp4',
                     'extractor_args': {'youtube': ['player_client=android,web,tv']},
                     'nocheckcertificate': True,
                     'no_color': True,

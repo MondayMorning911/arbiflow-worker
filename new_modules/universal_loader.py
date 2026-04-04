@@ -35,7 +35,7 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
     output_template = os.path.join(output_dir, f"{file_id}.%(ext)s")
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'format': 'bestvideo+bestaudio/best',
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
