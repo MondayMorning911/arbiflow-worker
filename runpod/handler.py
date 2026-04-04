@@ -288,30 +288,36 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write(header)
         f.write("\n".join(lines))
 
+def extract_video_id(url):
+    import re
+    # Регулярка для извлечения ID из разных типов ссылок YouTube
+    regex = r"(?:v=|\/|embed\/|shorts\/)([0-9A-Za-z_-]{11})"
+    match = re.search(regex, url)
+    if match:
+        return match.group(1)
+    return url
+
 def download_via_rapidapi(video_url, dest_path):
-    # Исправленный эндпоинт для этого API
-    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/dl"
+    # Извлекаем ID видео, так как этот API требует именно его
+    video_id = extract_video_id(video_url)
+    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/downloadVideo"
     headers = {
         "x-rapidapi-key": "a46b139ademsh2c7c294d619b0a2p1015bajsnb930db830785",
         "x-rapidapi-host": "yt-video-audio-downloader-api.p.rapidapi.com",
         "Content-Type": "application/json"
     }
-    # Параметры для 2K качества
+    
+    # Пробуем 1080p (максимум для этого API)
     payload = {
-        "id": video_url,
-        "type": "video",
-        "quality": "1440" 
+        "id": video_id,
+        "quality": "1080" 
     }
     
     try:
-        print(f"🌐 [ArbiFlow]: Requesting RapidAPI (2K target) for {video_url}", flush=True)
-        # Некоторые API требуют GET, некоторые POST. Пробуем универсально.
-        response = requests.get(api_url, params=payload, headers=headers, timeout=30)
+        print(f"🌐 [ArbiFlow]: Requesting RapidAPI (1080p target) for ID: {video_id}", flush=True)
+        # Этот API требует строго POST
+        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
         
-        if response.status_code == 404 or response.status_code == 405:
-            # Если GET не прошел, пробуем POST
-            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
-
         if response.status_code == 200:
             data = response.json()
             
@@ -336,7 +342,7 @@ def download_via_rapidapi(video_url, dest_path):
                             break
             
             if download_url:
-                print(f"📥 [ArbiFlow]: Link obtained. Downloading 1080p/2K video...", flush=True)
+                print(f"📥 [ArbiFlow]: Link obtained. Downloading 1080p video...", flush=True)
                 with requests.get(download_url, stream=True, timeout=300) as r:
                     r.raise_for_status()
                     with open(dest_path, 'wb') as f:
@@ -349,6 +355,7 @@ def download_via_rapidapi(video_url, dest_path):
             print(f"⚠️ [ArbiFlow]: RapidAPI error {response.status_code}: {response.text}", flush=True)
     except Exception as e:
         print(f"❌ [ArbiFlow]: RapidAPI exception: {e}", flush=True)
+    
     return False
 
 def handler(job):
@@ -454,6 +461,7 @@ def handler(job):
 
                     ydl_opts = {
                         'format': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
+                        'format_sort': ['res:1440', 'ext:mp4:m4a'],
                         'outtmpl': input_video,
                         'quiet': True,
                         'no_warnings': True,
@@ -465,11 +473,11 @@ def handler(job):
                         # Настройки из успешного теста:
                         'extractor_args': {
                             'youtube': {
-                                'player_client': ['android'],
+                                'player_client': ['android', 'web'],
                                 'player_skip': ['web_embedded-player_mechanism']
                             }
                         },
-                        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+                        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     }
                     
                     if cookies_path:
@@ -757,7 +765,7 @@ def handler(job):
                         ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
                             filter_complex=complex_filter,
-                            vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
+                            vcodec='libx264', acodec='aac', preset='fast', crf=18
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                     else:
                         # Уже вертикальное видео -> Просто подгоняем под 1080x1920
@@ -765,7 +773,7 @@ def handler(job):
                         ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
                             vf=complex_filter,
-                            vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
+                            vcodec='libx264', acodec='aac', preset='fast', crf=18
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                     
                     # Удаляем временный файл

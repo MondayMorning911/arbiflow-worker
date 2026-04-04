@@ -35,7 +35,8 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
     output_template = os.path.join(output_dir, f"{file_id}.%(ext)s")
 
     ydl_opts = {
-        'format': 'bestvideo+bestaudio/best',
+        'format': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
+        'format_sort': ['res:1440', 'ext:mp4:m4a'],
         'outtmpl': output_template,
         'quiet': True,
         'no_warnings': True,
@@ -46,11 +47,11 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
         'cachedir': False,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android'],
+                'player_client': ['android', 'web'],
                 'player_skip': ['web_embedded-player_mechanism']
             }
         },
-        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     # Check for cookies in root or cookies/ folder
