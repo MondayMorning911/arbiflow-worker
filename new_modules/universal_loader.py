@@ -40,9 +40,7 @@ async def download_video_ytdlp(url: str, output_dir: str) -> str:
         'quiet': True,
         'no_warnings': True,
         'merge_output_format': 'mp4',
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        }
+        'extractor_args': {'youtube': ['player_client=ios,tv,web']},
     }
 
     def _download():

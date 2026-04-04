@@ -867,13 +867,29 @@ async def handle_shorts_input(message: Message, state: FSMContext):
 
     try:
         if is_url:
-            # Pass URL directly to RunPod
-            output_path = await process_heavy_task(
-                file_path=input_data,  # URL string
-                task_name="ai_shorts",
-                progress_callback=update_progress,
-                is_url=True
-            )
+            # Скачиваем видео локально, чтобы обойти блокировку YouTube на RunPod
+            await update_progress(5, "Скачивание видео с YouTube...")
+            temp_dir = os.path.join(DOWNLOAD_DIR, f"yt_{uuid.uuid4().hex[:8]}")
+            os.makedirs(temp_dir, exist_ok=True)
+            try:
+                # Используем локальный yt-dlp (у него обычно домашний IP или прокси)
+                input_path = await download_video_ytdlp(input_data, temp_dir)
+                
+                # Теперь отправляем как файл (он загрузится на Catbox и воркер скачает его по прямой ссылке)
+                output_path = await process_heavy_task(
+                    file_path=input_path,
+                    task_name="ai_shorts",
+                    progress_callback=update_progress,
+                    is_url=False
+                )
+                
+                # Чистим за собой
+                if os.path.exists(input_path):
+                    os.remove(input_path)
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception as e:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise e
         else:
             # Download video first
             ext = ".mp4"
