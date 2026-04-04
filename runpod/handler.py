@@ -139,7 +139,8 @@ def get_face_center_x(video_path, start_time, duration, original_width):
                     x_coords.append(center_x)
             elif face_detection_method == "opencv" and cv2_face_cascade_instance:
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 4)
+                # Увеличиваем minNeighbors до 6 и minSize, чтобы отсеять ложные срабатывания (одежду, фон)
+                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
                 if len(faces) > 0:
                     # Берем самое большое лицо
                     faces = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
@@ -604,27 +605,37 @@ def handler(job):
                     # ШАГ 2: Находим центр лица на уже вырезанном маленьком кусочке (start_time = 0)
                     face_x = get_face_center_x(temp_extract_path, 0, end-start, width)
                     
-                    # libx264 требует четные размеры (делимые на 2)
-                    crop_w = int(height * 9 / 16)
-                    if crop_w % 2 != 0: crop_w -= 1
-                    
-                    target_h = min(height, 1080)
-                    if target_h % 2 != 0: target_h -= 1
-                    
-                    target_w = int(target_h * 9 / 16)
-                    if target_w % 2 != 0: target_w -= 1
-                    
-                    # Рассчитываем x_offset так, чтобы лицо было в центре
-                    x_offset = face_x - (crop_w // 2)
-                    # Ограничиваем, чтобы не выйти за края видео
-                    x_offset = max(0, min(x_offset, width - crop_w))
-                    
-                    # ШАГ 3: Финальный рендер с кропом
-                    ffmpeg.input(temp_extract_path).output(
-                        clip_path,
-                        vf=f"crop={crop_w}:{height}:{x_offset}:0,scale={target_w}:{target_h}",
-                        vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
-                    ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    if width > height:
+                        # Горизонтальное видео -> Делаем "Подкаст формат" (Размытый фон + широкий кроп 4:3)
+                        # Это решает проблему "слишком близкого лица" и "обрезанных краев"
+                        crop_w = int(height * 4 / 3)
+                        if crop_w > width: crop_w = width
+                        if crop_w % 2 != 0: crop_w -= 1
+                        
+                        # Рассчитываем x_offset так, чтобы лицо было в центре широкого кропа
+                        x_offset = face_x - (crop_w // 2)
+                        x_offset = max(0, min(x_offset, width - crop_w))
+                        
+                        complex_filter = (
+                            f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:20[bg];"
+                            f"[0:v]crop={crop_w}:{height}:{x_offset}:0,scale=1080:-1[fg];"
+                            f"[bg][fg]overlay=(W-w)/2:(H-h)/2"
+                        )
+                        
+                        # ШАГ 3: Финальный рендер с фильтром
+                        ffmpeg.input(temp_extract_path).output(
+                            clip_path,
+                            filter_complex=complex_filter,
+                            vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
+                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
+                    else:
+                        # Уже вертикальное видео -> Просто подгоняем под 1080x1920
+                        complex_filter = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
+                        ffmpeg.input(temp_extract_path).output(
+                            clip_path,
+                            vf=complex_filter,
+                            vcodec='libx264', acodec='aac', preset='ultrafast', crf=28
+                        ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                     
                     # Удаляем временный файл
                     if os.path.exists(temp_extract_path):
