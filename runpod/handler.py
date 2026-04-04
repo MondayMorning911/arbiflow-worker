@@ -348,7 +348,11 @@ def handler(job):
                     'outtmpl': input_video,
                     'quiet': True,
                     'no_warnings': True,
-                    'extractor_args': {'youtube': ['player_client=ios,tv,web']},
+                    'extractor_args': {'youtube': ['player_client=android,web,tv']},
+                    'nocheckcertificate': True,
+                    'no_color': True,
+                    'youtube_skip_dash_manifest': True,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([video_url])
