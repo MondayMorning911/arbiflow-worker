@@ -425,15 +425,14 @@ def handler(job):
             
             def analyze_block(block):
                 prompt = f"""
-                Ты — главный продюсер вирусного контента (TikTok, Reels, Shorts). Твоя задача — найти самые "сочные" и вовлекающие моменты в этом фрагменте видео.
-                Это может быть подкаст, интервью, влог или другой формат. Ищи моменты, где задается интересная тема, дилемма (например, "Она 10 из 10, но..."), смешная история, горячий спор или глубокая мысль.
+                Ты — строгий режиссер монтажа вирусных Shorts/Reels. Твоя задача — хирургически точно вырезать самые "сочные" моменты из транскрипта.
 
-                КРИТЕРИИ ИДЕАЛЬНОЙ СЦЕНЫ:
-                1. Идеальное начало (Хук): Сцена ДОЛЖНА начинаться ровно с начала новой темы или вопроса. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО начинать сцену с обрывка прошлой темы, смеха без контекста или конца предыдущей мысли. Зритель должен сразу понять контекст.
-                2. Развитие и финал: Внутри сцены должно быть полноценное рассуждение или история, которая логически завершается (панчлайн, вывод, интрига).
-                3. БЕЗ РЕКЛАМЫ: Строго игнорируй любые рекламные интеграции, просьбы подписаться, спонсорские вставки или моменты, где играет только музыка без смысловой речи.
-                4. Длительность: от 30 до 120 секунд.
-                5. Точность: Описание (scene_topic) и заголовок (cover_title) должны ИДЕАЛЬНО и ТОЧНО соответствовать тому, о чем реально говорят в выбранном отрезке. Не придумывай того, чего нет в тексте.
+                КРИТЕРИИ ИДЕАЛЬНОЙ СЦЕНЫ (ЖЕСТКИЕ ПРАВИЛА):
+                1. ХИРУРГИЧЕСКАЯ ТОЧНОСТЬ ТАЙМКОДОВ: Сцена должна начинаться РОВНО с того слова, где начинается интересная тема (Хук). Никакого "смоллтока", приветствий или мычания до этого! Заканчиваться сцена должна РОВНО на логичном выводе или панчлайне.
+                2. ЦЕЛЬНАЯ ИСТОРИЯ: Внутри отрезка должна быть полностью раскрыта одна мысль. Если тема только началась и блок закончился — НЕ БЕРИ эту сцену.
+                3. АНТИ-РЕКЛАМА И АНТИ-ПУСТОТА: Если между репликами (таймкодами) есть разрыв более 5-7 секунд — это реклама или музыкальная пауза. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать такие разрывы внутрь сцены!
+                4. КРАТКОСТЬ: Описание (scene_topic) и причина (viral_reason) должны быть ОЧЕНЬ короткими — максимум 1 предложение (до 10 слов).
+                5. Длительность: строго от 20 до 90 секунд.
 
                 Найди от 0 до 3 лучших самостоятельных сцен. Если в блоке только скучный треп, реклама или обрывки — смело возвращай пустой массив. Лучше 0 сцен, чем плохая сцена.
                 
@@ -448,10 +447,10 @@ def handler(job):
                       "end_time": 55.0,
                       "viral_score": 9,
                       "emotion_type": "юмор/дилемма/шок/инсайт",
-                      "viral_reason": "Почему это удержит внимание зрителя до конца",
+                      "viral_reason": "Коротко: почему это зацепит (до 10 слов)",
                       "hook_text": "Точная первая фраза, с которой начинается клип",
                       "cover_title": "Кликабельный заголовок (до 5 слов)",
-                      "scene_topic": "Детальное и точное описание того, что происходит в клипе"
+                      "scene_topic": "Коротко: о чем клип (до 10 слов)"
                     }}
                   ]
                 }}
@@ -642,24 +641,30 @@ def handler(job):
                         os.remove(temp_extract_path)
                         
                     desc = f"🎬 {i+1}.mp4 [{emotion_type}] - {cover_title}\n📝 Тема: {scene_topic}\n🔥 Оценка: {viral_score}/10\n💡 Почему залетит: {viral_reason}\n"
-                    return clip_path, clip_filename, desc
+                    return clip_path, clip_filename, desc, i
                 except Exception as e:
                     print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                     if os.path.exists(temp_extract_path):
                         try: os.remove(temp_extract_path)
                         except: pass
-                    return None, None, None
+                    return None, None, None, i
 
             with zipfile.ZipFile(output_zip, 'w') as zipf:
                 # Запускаем обработку клипов параллельно (до 3 потоков, чтобы не перегрузить CPU/RAM)
+                results_data = []
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                     futures = [executor.submit(process_clip, i, clip) for i, clip in enumerate(clips_data)]
                     for future in concurrent.futures.as_completed(futures):
-                        clip_path, clip_filename, desc = future.result()
+                        clip_path, clip_filename, desc, idx = future.result()
                         if clip_path and os.path.exists(clip_path):
                             zipf.write(clip_path, arcname=clip_filename)
-                            descriptions.append(desc)
+                            results_data.append((idx, desc))
                             cleanup_list.append(clip_path)
+                            
+                # Сортируем описания по порядку клипов (1, 2, 3...)
+                results_data.sort(key=lambda x: x[0])
+                for _, desc in results_data:
+                    descriptions.append(desc)
                         
                 # Add descriptions.txt
                 desc_path = os.path.join(TEMP_PATH, "descriptions.txt")
