@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 
 # Установка Python 3.10 и системных зависимостей
 RUN apt-get update && \
-    apt-get install -y python3.10 python3-pip ffmpeg fonts-liberation libgl1-mesa-glx libglib2.0-0 wget git && \
+    apt-get install -y python3.10 python3-pip ffmpeg aria2 fonts-liberation libgl1-mesa-glx libglib2.0-0 wget git && \
     rm -rf /var/lib/apt/lists/*
 
 # Делаем python3.10 основным python
