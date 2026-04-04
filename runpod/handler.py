@@ -668,10 +668,30 @@ def handler(job):
                 try:
                     resp = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
                     resp.raise_for_status()
-                    content = resp.json()['choices'][0]['message']['content']
-                    if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
-                    elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
-                    return json.loads(content).get("scenes", [])
+                    
+                    data = resp.json()
+                    if not data.get('choices'):
+                        print(f"⚠️ [ArbiFlow]: AI вернул пустой ответ (no choices) для блока {block['id']}")
+                        return []
+                        
+                    content = data['choices'][0]['message']['content']
+                    
+                    # БЕЗОПАСНЫЙ ПАРСИНГ MARKDOWN
+                    if "```json" in content:
+                        parts = content.split("```json")
+                        if len(parts) > 1:
+                            content = parts[1].split("```")[0].strip()
+                    elif "```" in content:
+                        parts = content.split("```")
+                        if len(parts) > 1:
+                            content = parts[1].split("```")[0].strip()
+                    
+                    # Пытаемся распарсить как чистый JSON
+                    try:
+                        return json.loads(content).get("scenes", [])
+                    except json.JSONDecodeError:
+                        print(f"⚠️ [ArbiFlow]: Не удалось распарсить JSON из текста блока {block['id']}: {content[:100]}...")
+                        return []
                 except Exception as e:
                     print(f"⚠️ Block {block['id']} analysis failed: {e}")
                     return []
@@ -744,11 +764,30 @@ def handler(job):
             try:
                 resp = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
                 resp.raise_for_status()
-                content = resp.json()['choices'][0]['message']['content']
-                if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
-                final_data = json.loads(content)
-                clips_data = final_data.get("clips", [])
+                
+                data = resp.json()
+                if not data.get('choices'):
+                    print(f"⚠️ [ArbiFlow]: AI вернул пустой ответ (no choices) для глобального отбора")
+                    clips_data = top_scenes[:5]
+                else:
+                    content = data['choices'][0]['message']['content']
+                    
+                    # БЕЗОПАСНЫЙ ПАРСИНГ MARKDOWN
+                    if "```json" in content:
+                        parts = content.split("```json")
+                        if len(parts) > 1:
+                            content = parts[1].split("```")[0].strip()
+                    elif "```" in content:
+                        parts = content.split("```")
+                        if len(parts) > 1:
+                            content = parts[1].split("```")[0].strip()
+                    
+                    try:
+                        final_data = json.loads(content)
+                        clips_data = final_data.get("clips", [])
+                    except json.JSONDecodeError:
+                        print(f"⚠️ [ArbiFlow]: Не удалось распарсить JSON из глобального отбора: {content[:100]}...")
+                        clips_data = top_scenes[:5]
             except Exception as e:
                 print(f"❌ [ArbiFlow Worker]: Global selection failed: {e}. Falling back to top 5 scenes.", flush=True)
                 clips_data = top_scenes[:5]
