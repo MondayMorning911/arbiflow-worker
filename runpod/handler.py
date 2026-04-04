@@ -288,6 +288,45 @@ Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H000000
         f.write(header)
         f.write("\n".join(lines))
 
+def download_via_rapidapi(video_url, dest_path):
+    api_url = "https://yt-video-audio-downloader-api.p.rapidapi.com/downloadVideo"
+    headers = {
+        "x-rapidapi-key": "a46b139ademsh2c7c294d619b0a2p1015bajsnb930db830785",
+        "x-rapidapi-host": "yt-video-audio-downloader-api.p.rapidapi.com",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "url": video_url,
+        "format": "mp4"
+    }
+    
+    try:
+        print(f"🌐 [ArbiFlow]: Requesting RapidAPI download for {video_url}", flush=True)
+        response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            # Проверяем разные варианты ключей в ответе (зависит от версии API)
+            download_url = data.get("url") or data.get("link") or data.get("downloadUrl")
+            
+            if not download_url and "data" in data:
+                download_url = data["data"].get("url") or data["data"].get("link")
+
+            if download_url:
+                print(f"📥 [ArbiFlow]: RapidAPI link obtained. Downloading...", flush=True)
+                with requests.get(download_url, stream=True, timeout=120) as r:
+                    r.raise_for_status()
+                    with open(dest_path, 'wb') as f:
+                        for chunk in r.iter_content(chunk_size=16384):
+                            f.write(chunk)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: RapidAPI response missing URL: {data}", flush=True)
+        else:
+            print(f"⚠️ [ArbiFlow]: RapidAPI error {response.status_code}: {response.text}", flush=True)
+    except Exception as e:
+        print(f"❌ [ArbiFlow]: RapidAPI exception: {e}", flush=True)
+    return False
+
 def handler(job):
     job_id = job.get("id")
     job_input = job.get("input", {})
@@ -358,65 +397,73 @@ def handler(job):
             
             # 1. Download if URL
             if is_url:
-                print(f"🚀 [ArbiFlow Worker]: Downloading video via verified Android-client...", flush=True)
+                print(f"📥 [ArbiFlow Worker]: Starting download process...", flush=True)
                 
-                # --- УМНАЯ ПРОВЕРКА КУКОВ ---
-                cookies_content = job_input.get("cookies")
-                cookies_path = None
+                # 1. Сначала пробуем RapidAPI (самый надежный платный метод)
+                success = download_via_rapidapi(video_url, input_video)
                 
-                if cookies_content:
-                    # Если куки пришли в запросе от бота
-                    cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
-                    with open(cookies_path, "w") as f:
-                        f.write(cookies_content)
-                    print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
-                else:
-                    # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
-                    local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
-                    # Также проверим в корне /app
-                    root_cookies = "/app/cookies.txt"
+                if not success:
+                    print(f"⚠️ [ArbiFlow Worker]: RapidAPI failed. Falling back to verified Android-client...", flush=True)
                     
-                    if os.path.exists(local_cookies):
-                        cookies_path = local_cookies
-                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
-                    elif os.path.exists(root_cookies):
-                        cookies_path = root_cookies
-                        print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
+                    # --- УМНАЯ ПРОВЕРКА КУКОВ ---
+                    cookies_content = job_input.get("cookies")
+                    cookies_path = None
+                    
+                    if cookies_content:
+                        # Если куки пришли в запросе от бота
+                        cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
+                        with open(cookies_path, "w") as f:
+                            f.write(cookies_content)
+                        print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
+                    else:
+                        # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
+                        local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
+                        # Также проверим в корне /app
+                        root_cookies = "/app/cookies.txt"
+                        
+                        if os.path.exists(local_cookies):
+                            cookies_path = local_cookies
+                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
+                        elif os.path.exists(root_cookies):
+                            cookies_path = root_cookies
+                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
 
-                ydl_opts = {
-                    'format': 'bestvideo+bestaudio/best',
-                    'outtmpl': input_video,
-                    'quiet': True,
-                    'no_warnings': True,
-                    'merge_output_format': 'mp4',
-                    'nocheckcertificate': True,
-                    'no_color': True,
-                    'youtube_skip_dash_manifest': True,
-                    'cachedir': False,
-                    # Настройки из успешного теста:
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android'],
-                            'player_skip': ['web_embedded-player_mechanism']
-                        }
-                    },
-                    'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
-                }
-                
-                if cookies_path:
-                    ydl_opts['cookiefile'] = cookies_path
-                    print(f"✅ [ArbiFlow Worker]: Cookies applied for extra auth.", flush=True)
+                    ydl_opts = {
+                        'format': 'bestvideo+bestaudio/best',
+                        'outtmpl': input_video,
+                        'quiet': True,
+                        'no_warnings': True,
+                        'merge_output_format': 'mp4',
+                        'nocheckcertificate': True,
+                        'no_color': True,
+                        'youtube_skip_dash_manifest': True,
+                        'cachedir': False,
+                        # Настройки из успешного теста:
+                        'extractor_args': {
+                            'youtube': {
+                                'player_client': ['android'],
+                                'player_skip': ['web_embedded-player_mechanism']
+                            }
+                        },
+                        'user_agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36'
+                    }
+                    
+                    if cookies_path:
+                        ydl_opts['cookiefile'] = cookies_path
+                        print(f"✅ [ArbiFlow Worker]: Cookies applied for extra auth.", flush=True)
 
-                try:
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([video_url])
-                    print(f"✅ [ArbiFlow Worker]: Video downloaded successfully.", flush=True)
-                finally:
-                    # Удаляем только временный файл, созданный из запроса
-                    if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
-                        try:
-                            os.remove(cookies_path)
-                        except: pass
+                    try:
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([video_url])
+                        print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via fallback.", flush=True)
+                    finally:
+                        # Удаляем только временный файл, созданный из запроса
+                        if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
+                            try:
+                                os.remove(cookies_path)
+                            except: pass
+                else:
+                    print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
             
             # 2. Transcribe
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
