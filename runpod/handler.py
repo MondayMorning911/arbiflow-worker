@@ -79,8 +79,12 @@ def get_whisper_model():
 def get_face_detector():
     global mp_face_detection
     if mp_face_detection is None:
-        from mediapipe.solutions import face_detection
-        mp_face_detection = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        try:
+            import mediapipe.python.solutions.face_detection as face_detection
+            mp_face_detection = face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+        except ImportError:
+            import mediapipe as mp
+            mp_face_detection = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
     return mp_face_detection
 
 def get_face_center_x(video_path, start_time, duration, original_width):
@@ -331,104 +335,85 @@ def handler(job):
             if not transcript:
                 raise Exception("Transcript is empty. Could not detect speech.")
                 
-            # 3. Analyze with DeepSeek
-            print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with DeepSeek...", flush=True)
+            # 3. Multi-Pass Pipeline Analysis (Smart Chunking by Pauses)
+            print(f"🧩 [ArbiFlow Worker]: Structuring transcript into semantic blocks by pauses...", flush=True)
+            import concurrent.futures
             
-            prompt = f"""
-            Ты — профессиональный редактор вирусных коротких видео.
-            Ты анализируешь длинный YouTube-контент как сценарист и монтажёр.
+            blocks = []
+            current_block_segs = []
+            
+            if segments_list:
+                block_start_time = segments_list[0].start
+            else:
+                block_start_time = 0
 
-            ТВОЯ ЗАДАЧА:
-            Найти 5–10 самостоятельных СЦЕН,
-            которые можно вырезать как полноценные вирусные клипы.
+            MIN_BLOCK_DURATION = 120  # Минимальный блок 2 минуты
+            MAX_BLOCK_DURATION = 420  # Максимальный блок 7 минут
+            PAUSE_THRESHOLD = 3.0     # Пауза 3+ секунды считается сменой сцены
 
-            --------------------------------------------------
-            ФАЗА 1 — Разметка сцен
+            for i, seg in enumerate(segments_list):
+                current_block_segs.append(seg)
+                current_duration = seg.end - block_start_time
 
-            1. Проанализируй ВЕСЬ транскрипт целиком.
-            2. Раздели его на смысловые сцены (каждая сцена = одна тема / один конфликт / одна история).
-            3. Для каждой сцены определи:
-               - Главную тему
-               - Есть ли конфликт
-               - Есть ли кульминация
-               - Есть ли завершение
+                should_split = False
+                if i < len(segments_list) - 1:
+                    next_seg = segments_list[i+1]
+                    gap = next_seg.start - seg.end
 
-            Если сцена не завершена — не подходит.
+                    # 1. Если блок достиг минимума (2 мин) И есть длинная пауза (>3 сек) -> режем
+                    if gap >= PAUSE_THRESHOLD and current_duration >= MIN_BLOCK_DURATION:
+                        should_split = True
+                    # 2. Если блок слишком большой (почти 7 мин) -> режем на любой микро-паузе (>1 сек)
+                    elif current_duration >= MAX_BLOCK_DURATION and gap >= 1.0:
+                        should_split = True
+                    # 3. Жесткий лимит (8 мин) -> режем в любом случае, чтобы не перегрузить ИИ
+                    elif current_duration >= MAX_BLOCK_DURATION + 60:
+                        should_split = True
+                else:
+                    should_split = True # Последний сегмент
 
-            --------------------------------------------------
-            ФАЗА 2 — Отбор лучших
-
-            Из всех найденных сцен выбери 5–10 лучших по критериям:
-
-            1. Эмоциональный пик
-            2. Конфликт / спор
-            3. Неожиданность
-            4. Сильный инсайт
-            5. Потенциал комментариев
-            6. Потенциал удержания
-
-            --------------------------------------------------
-            КРИТИЧЕСКИЕ ПРАВИЛА:
-
-            - Один клип = одна сцена
-            - Нельзя брать куски внутри одной сцены как отдельные клипы
-            - Клип не должен пересекаться по времени с другим
-            - Клип должен быть самодостаточным
-            - Минимум 30 секунд
-            - Максимум 2 минуты
-            - Полностью завершённая мысль
-
-            --------------------------------------------------
-            ДИВЕРСИФИКАЦИЯ:
-
-            Клипы должны:
-            - Быть из разных частей видео (начало / середина / конец)
-            - Не повторять одну и ту же тему
-            - Не дублировать один и тот же тейк
-
-            --------------------------------------------------
-            ОЦЕНКА:
-
-            Для каждого клипа выставь:
-
-            viral_score: от 1 до 10
-            (где 10 — максимальный шанс залёта)
-
-            Оцени по:
-            - силе хука
-            - силе кульминации
-            - эмоциональности
-            - потенциалу удержания
-
-            --------------------------------------------------
-
-            ТРАНСКРИПТ:
-            {transcript}
-
-            --------------------------------------------------
-
-            ВЫВОД СТРОГО В ФОРМАТЕ JSON-ОБЪЕКТА (обязательно используй ключ "clips"):
-
-            {{
-              "clips": [
+                if should_split and current_block_segs:
+                    text = ""
+                    for s in current_block_segs:
+                        text += f"[{format_timestamp(s.start)} - {format_timestamp(s.end)}] {s.text}\n"
+                    blocks.append({
+                        "id": len(blocks) + 1,
+                        "text": text
+                    })
+                    current_block_segs = []
+                    if i < len(segments_list) - 1:
+                        block_start_time = segments_list[i+1].start
+                
+            print(f"📦 [ArbiFlow Worker]: Created {len(blocks)} semantic blocks for local analysis.", flush=True)
+            
+            all_scenes = []
+            
+            def analyze_block(block):
+                prompt = f"""
+                Ты — скаут вирусного контента. Проанализируй этот фрагмент видео.
+                Найди от 0 до 3 лучших самостоятельных сцен (каждая 30-120 сек) для Shorts/Reels.
+                Сцена должна иметь хук, развитие и завершение.
+                
+                ТРАНСКРИПТ:
+                {block['text']}
+                
+                ВЫВОД СТРОГО В JSON:
                 {{
-                  "scene_topic": "о чём сцена",
-                  "start_time": 15.5,
-                  "end_time": 65.0,
-                  "duration_seconds": 49,
-                  "hook_text": "первые 5-12 слов сцены",
-                  "cover_title": "цепляющий заголовок до 10 слов",
-                  "viral_reason": "почему это может залететь",
-                  "emotion_type": "конфликт | инсайт | драма | юмор | провокация | признание",
-                  "viral_score": 9
+                  "scenes": [
+                    {{
+                      "start_time": 12.5,
+                      "end_time": 55.0,
+                      "viral_score": 8,
+                      "emotion_type": "юмор",
+                      "viral_reason": "почему залетит",
+                      "hook_text": "первые слова",
+                      "cover_title": "заголовок",
+                      "scene_topic": "тема"
+                    }}
+                  ]
                 }}
-              ]
-            }}
-
-            Никакого текста вне JSON.
-            """
-            
-            try:
+                Если сцен нет, верни {{"scenes": []}}.
+                """
                 headers = {
                     "Authorization": f"Bearer {deepseek_api_key}",
                     "Content-Type": "application/json"
@@ -436,67 +421,110 @@ def handler(job):
                 payload = {
                     "model": "deepseek-chat",
                     "messages": [
-                        {"role": "system", "content": "You are a professional viral video editor. Respond ONLY with valid JSON in Russian."},
+                        {"role": "system", "content": "You output ONLY valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
                     "response_format": {"type": "json_object"}
                 }
-                
-                ds_response = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
-                ds_response.raise_for_status()
-                
-                ds_data = ds_response.json()
-                content = ds_data['choices'][0]['message']['content']
-                
-                # DeepSeek might return JSON inside markdown blocks or just raw JSON
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
-                
-                clips_data = json.loads(content)
-                
-                # Улучшенный парсинг: ищем массив внутри объекта
-                if isinstance(clips_data, dict):
-                    extracted = False
-                    # Проверяем известные ключи
-                    for key in ["clips", "segments", "viral_segments", "fragments", "data"]:
-                        if key in clips_data and isinstance(clips_data[key], list):
-                            clips_data = clips_data[key]
-                            extracted = True
-                            break
+                try:
+                    resp = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
+                    resp.raise_for_status()
+                    content = resp.json()['choices'][0]['message']['content']
+                    if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+                    elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
+                    return json.loads(content).get("scenes", [])
+                except Exception as e:
+                    print(f"⚠️ Block {block['id']} analysis failed: {e}")
+                    return []
+
+            print(f"🔍 [ArbiFlow Worker]: Running local analysis (multi-threading)...", flush=True)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                results = executor.map(analyze_block, blocks)
+                for res in results:
+                    if isinstance(res, list):
+                        all_scenes.extend(res)
+                        
+            # Filter valid scenes
+            valid_scenes = []
+            for s in all_scenes:
+                if 'start_time' in s and 'end_time' in s:
+                    try:
+                        s['start_time'] = float(s['start_time'])
+                        s['end_time'] = float(s['end_time'])
+                        if s['end_time'] - s['start_time'] >= 20:
+                            valid_scenes.append(s)
+                    except: pass
                     
-                    # Если не нашли по ключам, берем первый попавшийся массив
-                    if not extracted:
-                        for key, value in clips_data.items():
-                            if isinstance(value, list):
-                                clips_data = value
-                                extracted = True
-                                break
-                                
-                    # Если массивов нет вообще, оборачиваем сам объект в список
-                    if not extracted:
-                        clips_data = [clips_data]
-                
-                if not isinstance(clips_data, list):
-                    clips_data = []
-                    
-                # Фильтруем только валидные клипы (где есть start_time)
-                valid_clips = []
-                for clip in clips_data:
-                    if 'start_time' in clip and 'end_time' in clip:
-                        valid_clips.append(clip)
-                    elif 'start' in clip and 'end' in clip:
-                        clip['start_time'] = clip['start']
-                        clip['end_time'] = clip['end']
-                        valid_clips.append(clip)
-                clips_data = valid_clips
-                
-            except Exception as e:
-                print(f"❌ [ArbiFlow Worker]: DeepSeek Error: {str(e)}", flush=True)
-                raise Exception(f"AI Analysis failed: {str(e)}")
+            print(f"🎯 [ArbiFlow Worker]: Found {len(valid_scenes)} potential scenes. Running global selection...", flush=True)
             
-            print(f"✅ [ArbiFlow Worker]: DeepSeek found {len(clips_data)} clips.", flush=True)
+            if not valid_scenes:
+                raise Exception("No valid scenes found in the video.")
+                
+            valid_scenes.sort(key=lambda x: x.get('viral_score', 0), reverse=True)
+            top_scenes = valid_scenes[:20]
+            
+            global_prompt = f"""
+            Вот список лучших потенциальных вирусных сцен из видео:
+            {json.dumps(top_scenes, ensure_ascii=False, indent=2)}
+            
+            Твоя задача: выбрать от 3 до 8 САМЫХ ЛУЧШИХ сцен для публикации.
+            
+            ПРАВИЛА:
+            1. Сцены НЕ ДОЛЖНЫ пересекаться по времени (start_time и end_time).
+            2. Выбирай самые разнообразные по темам.
+            3. Отдавай приоритет высокому viral_score.
+            
+            ВЫВОД СТРОГО В JSON:
+            {{
+              "clips": [
+                {{
+                  "start_time": 12.5,
+                  "end_time": 55.0,
+                  "cover_title": "...",
+                  "scene_topic": "...",
+                  "viral_reason": "...",
+                  "emotion_type": "...",
+                  "viral_score": 8
+                }}
+              ]
+            }}
+            """
+            
+            headers = {
+                "Authorization": f"Bearer {deepseek_api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": "You output ONLY valid JSON."},
+                    {"role": "user", "content": global_prompt}
+                ],
+                "response_format": {"type": "json_object"}
+            }
+            try:
+                resp = requests.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload, timeout=60)
+                resp.raise_for_status()
+                content = resp.json()['choices'][0]['message']['content']
+                if "```json" in content: content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content: content = content.split("```")[1].split("```")[0].strip()
+                final_data = json.loads(content)
+                clips_data = final_data.get("clips", [])
+            except Exception as e:
+                print(f"❌ [ArbiFlow Worker]: Global selection failed: {e}. Falling back to top 5 scenes.", flush=True)
+                clips_data = top_scenes[:5]
+                
+            # 4. Validation (Remove overlaps locally)
+            clips_data.sort(key=lambda x: x['start_time'])
+            validated_clips = []
+            last_end = -1
+            for clip in clips_data:
+                if clip['start_time'] >= last_end:
+                    validated_clips.append(clip)
+                    last_end = clip['end_time']
+                    
+            clips_data = validated_clips
+            print(f"✅ [ArbiFlow Worker]: Selected {len(clips_data)} final clips.", flush=True)
             
             # 4. Cut and Crop
             output_zip = os.path.join(TEMP_PATH, f"shorts_{job_id}.zip")
