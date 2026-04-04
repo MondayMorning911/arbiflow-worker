@@ -21,7 +21,8 @@ COPY requirements.txt .
 # Установка Torch и остальных библиотек через pip (избегаем конфликтов conda)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch==2.1.0+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -U https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz
 
 # Копируем все файлы проекта
 COPY . .
@@ -30,4 +31,5 @@ COPY . .
 RUN mkdir -p downloads sessions /tmp/arbiflow
 
 # На RunPod должен запускаться только обработчик (worker)
+# Основной бот (bot.py) будет запущен пользователем локально на его машине (Mac)
 CMD ["python", "runpod/handler.py"]

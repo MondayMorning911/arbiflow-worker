@@ -309,6 +309,11 @@ def handler(job):
                     'outtmpl': input_video,
                     'quiet': True,
                     'no_warnings': True,
+                    'extractor_args': {'youtube': ['player_client=android']},
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
                 }
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([video_url])
