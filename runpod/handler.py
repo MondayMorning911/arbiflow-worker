@@ -25,6 +25,8 @@ try:
     from google.genai import types
     import edge_tts
     from faster_whisper import WhisperModel
+    import cv2
+    import mediapipe as mp
     print("✅ [ArbiFlow Worker]: All modules imported successfully.", flush=True)
 except ImportError as e:
     print(f"❌ [ArbiFlow Worker]: MISSING MODULE: {e}", file=sys.stderr, flush=True)
@@ -51,6 +53,7 @@ print(f"📍 [ArbiFlow Worker]: Font path: {FONT_PATH}", flush=True)
 
 # Глобальные переменные для моделей (ленивая загрузка)
 whisper_model = None
+mp_face_detection = None
 
 def get_whisper_model():
     global whisper_model
@@ -72,6 +75,41 @@ def get_whisper_model():
             print(f"❌ [ArbiFlow Worker]: Failed to load Whisper: {e}", file=sys.stderr, flush=True)
             raise e
     return whisper_model
+
+def get_face_detector():
+    global mp_face_detection
+    if mp_face_detection is None:
+        import mediapipe as mp
+        mp_face_detection = mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+    return mp_face_detection
+
+def get_face_center_x(video_path, start_time, duration, original_width):
+    try:
+        detector = get_face_detector()
+        cap = cv2.VideoCapture(video_path)
+        # Проверяем кадры в начале, середине и конце клипа
+        sample_times = [start_time + 1, start_time + duration/2, start_time + duration - 1]
+        x_coords = []
+        
+        for t in sample_times:
+            if t < 0: t = 0
+            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            ret, frame = cap.read()
+            if not ret: continue
+            
+            results = detector.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            if results.detections:
+                bbox = results.detections[0].location_data.relative_bounding_box
+                center_x = (bbox.xmin + bbox.width / 2) * original_width
+                x_coords.append(center_x)
+        
+        cap.release()
+        if x_coords:
+            return int(sum(x_coords) / len(x_coords))
+        return original_width // 2
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow Worker]: Face detection failed: {e}")
+        return original_width // 2
 
 def download_file(url, dest):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -279,15 +317,31 @@ def handler(job):
             print(f"🧠 [ArbiFlow Worker]: Analyzing transcript with DeepSeek...", flush=True)
             
             prompt = f"""
-            Analyze the following video transcript and identify the 3 most engaging, viral-worthy segments.
-            Each segment should be between 15 and 60 seconds long.
-            Return the result as a JSON array of objects, where each object has:
-            - start_time: start time in seconds (float)
-            - end_time: end time in seconds (float)
-            - description: a short, catchy title/description for the clip
-            
-            Transcript:
+            Ты — профессиональный эксперт по виральному сторителлингу. Твоя задача: найти в предоставленном тексте 3 фрагмента с самым высоким потенциалом удержания (retention).
+
+            ЭТО МОЖЕТ БЫТЬ:
+            1. **Curiosity Gap (Разрыв любопытства):** Фрагмент начинается с чего-то непонятного или интригующего, что заставляет дослушать до конца.
+            2. **Emotional/Action Peak:** Момент наивысшего напряжения, самой глубокой мысли или самого смешного момента.
+            3. **Standalone Value:** Кусок, который понятен без контекста всего видео и несет в себе законченную мини-историю или инсайт.
+            4. **The Hook:** Первые 2-3 секунды фрагмента должны содержать мощный визуальный или смысловой "зацеп".
+
+            ТЕХНИЧЕСКИЕ ПРАВИЛА:
+            - Длительность: 20-55 секунд.
+            - Обязательно: логическое завершение фразы.
+            - Формат: Строгий JSON на русском языке.
+
+            ТРАНСКРИПТ:
             {transcript}
+
+            ВЫДАЙ JSON:
+            [
+              {{
+                "start_time": float,
+                "end_time": float,
+                "description": "Краткое описание (hook) для обложки",
+                "format_type": "Тип контента (инсайт, юмор, драма, обучение)"
+              }}
+            ]
             """
             
             try:
@@ -298,7 +352,7 @@ def handler(job):
                 payload = {
                     "model": "deepseek-chat",
                     "messages": [
-                        {"role": "system", "content": "You are a helpful assistant that identifies viral video segments and returns ONLY valid JSON."},
+                        {"role": "system", "content": "You are a viral content expert. Respond ONLY with valid JSON in Russian."},
                         {"role": "user", "content": prompt}
                     ],
                     "response_format": {"type": "json_object"}
@@ -353,12 +407,15 @@ def handler(job):
                     cleanup_list.append(clip_path)
                     
                     print(f"🎬 [ArbiFlow Worker]: Processing clip {i+1}: {start}s - {end}s", flush=True)
-                    # Simple center crop for now (9:16)
+                    # Умный кроп (поиск лица)
                     try:
                         probe = ffmpeg.probe(input_video)
                         v_stream = next((s for s in probe['streams'] if s['codec_type'] == 'video'), None)
                         width = int(v_stream['width'])
                         height = int(v_stream['height'])
+                        
+                        # Находим центр лица
+                        face_x = get_face_center_x(input_video, start, end-start, width)
                         
                         # libx264 требует четные размеры (делимые на 2)
                         crop_w = int(height * 9 / 16)
@@ -370,7 +427,10 @@ def handler(job):
                         target_w = int(target_h * 9 / 16)
                         if target_w % 2 != 0: target_w -= 1
                         
-                        x_offset = (width - crop_w) // 2
+                        # Рассчитываем x_offset так, чтобы лицо было в центре
+                        x_offset = face_x - (crop_w // 2)
+                        # Ограничиваем, чтобы не выйти за края видео
+                        x_offset = max(0, min(x_offset, width - crop_w))
                         
                         ffmpeg.input(input_video, ss=start, t=end-start).output(
                             clip_path,
@@ -379,7 +439,8 @@ def handler(job):
                         ).overwrite_output().run(capture_stdout=True, capture_stderr=True)
                         
                         zipf.write(clip_path, arcname=clip_filename)
-                        descriptions.append(f"🎬 {i+1}.mp4 - {desc}")
+                        format_type = clip.get('format_type', 'Shorts')
+                        descriptions.append(f"🎬 {i+1}.mp4 [{format_type}] - {desc}")
                     except Exception as e:
                         print(f"❌ [ArbiFlow Worker]: Error processing clip {i+1}: {e}", file=sys.stderr, flush=True)
                         
