@@ -354,6 +354,8 @@ def download_via_rapidapi(video_url, dest_path):
             final_link = items[0].get("url")
             print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано качество: {items[0].get('quality')}", flush=True)
 
+        print(f"🔗 [ArbiFlow]: Direct link (first 100 chars): {final_link[:100]}...", flush=True)
+
         # 3. Загрузка файла на RunPod
         print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
         
@@ -368,6 +370,8 @@ def download_via_rapidapi(video_url, dest_path):
             # -x16 (соединений на сервер), -s16 (частей на файл), -k1M (минимальный размер части)
             cmd = [
                 'aria2c', 
+                '--header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                '--header', 'Referer: https://www.youtube.com/',
                 '-x', '16', 
                 '-s', '16', 
                 '-j', '16', 
@@ -388,7 +392,11 @@ def download_via_rapidapi(video_url, dest_path):
             
         if not download_success:
             # Стандартный метод (fallback)
-            with requests.get(final_link, stream=True, timeout=60) as r:
+            headers_dl = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Referer': 'https://www.youtube.com/'
+            }
+            with requests.get(final_link, stream=True, timeout=60, headers=headers_dl, verify=False) as r:
                 r.raise_for_status()
                 with open(dest_path, 'wb') as f:
                     # Качаем кусками по 1МБ
@@ -495,7 +503,9 @@ def handler(job):
                         cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
                         with open(cookies_path, "w") as f:
                             f.write(cookies_content)
-                        print(f"🍪 [ArbiFlow Worker]: Using cookies from job input.", flush=True)
+                        print(f"🍪 [ArbiFlow Worker]: Using cookies from job input. (Size: {len(cookies_content)} bytes)", flush=True)
+                        if not cookies_content.strip().startswith("# Netscape"):
+                            print("⚠️ [ArbiFlow Worker]: Cookies might not be in Netscape format! (Should start with # Netscape)", flush=True)
                     else:
                         # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
                         local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
@@ -520,11 +530,12 @@ def handler(job):
                         'no_color': True,
                         'youtube_skip_dash_manifest': True,
                         'cachedir': False,
+                        'geo_bypass': True,
                         'concurrent_fragment_downloads': 10,
                         # Настройки из успешного теста:
                         'extractor_args': {
                             'youtube': {
-                                'player_client': ['android', 'web'],
+                                'player_client': ['ios', 'android', 'web'],
                                 'player_skip': ['web_embedded-player_mechanism']
                             }
                         },
