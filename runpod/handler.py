@@ -289,57 +289,61 @@ def extract_video_id(url):
         return match.group(1)
     return url
 
-def download_file_fast(direct_link, dest_path):
+def download_file_fast(direct_link, dest_path, method="aria2c"):
     """
     Самый надежный метод скачивания сверхдлинных ссылок.
     """
     import subprocess
     import os
     
-    # Создаем временный файл со ссылкой (решает проблему длины)
-    url_file = dest_path + ".url.txt"
-    with open(url_file, "w") as f:
-        f.write(direct_link)
-        
-    try:
-        print(f"🚀 [ArbiFlow]: Запуск aria2c (через url-file)...", flush=True)
-        cmd = [
-            "aria2c", 
-            "-i", url_file,           # Читаем ссылку из файла
-            "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
-            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "--referer=https://www.youtube.com/",
-            "--check-certificate=false",
-            "--file-allocation=none",
-            "-o", os.path.basename(dest_path), 
-            "-d", os.path.dirname(dest_path)
-        ]
-        
-        process = subprocess.run(cmd, capture_output=True)
-        if process.returncode == 0:
-            print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-            return True
-        else:
-            print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode}). Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+    if method == "aria2c":
+        # Создаем временный файл со ссылкой (решает проблему длины)
+        url_file = dest_path + ".url.txt"
+        with open(url_file, "w") as f:
+            f.write(direct_link)
             
-            print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую requests (медленно, но надежно)...", flush=True)
-            try:
-                import requests
-                response = requests.get(direct_link, stream=True, timeout=300)
-                response.raise_for_status()
-                with open(dest_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через requests ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+        try:
+            print(f"🚀 [ArbiFlow]: Запуск aria2c (через url-file)...", flush=True)
+            cmd = [
+                "aria2c", 
+                "-i", url_file,           # Читаем ссылку из файла
+                "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
+                "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+                "--referer=https://www.youtube.com/",
+                "--check-certificate=false",
+                "--file-allocation=none",
+                "-o", os.path.basename(dest_path), 
+                "-d", os.path.dirname(dest_path)
+            ]
+            
+            process = subprocess.run(cmd, capture_output=True)
+            if process.returncode == 0:
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
                 return True
-            except Exception as e:
-                print(f"⚠️ [ArbiFlow]: Ошибка при скачивании через requests: {e}", flush=True)
+            else:
+                print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode}). Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+                return False
+        finally:
+            if os.path.exists(url_file): os.remove(url_file)
             
+    elif method == "requests":
+        print(f"🚀 [ArbiFlow]: Запуск requests (медленно, но надежно)...", flush=True)
+        try:
+            import requests
+            response = requests.get(direct_link, stream=True, timeout=300)
+            response.raise_for_status()
+            with open(dest_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"✅ [ArbiFlow]: Файл успешно сохранен через requests ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+            return True
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: Ошибка при скачивании через requests: {e}", flush=True)
             return False
-    finally:
-        if os.path.exists(url_file): os.remove(url_file)
+            
+    return False
 
-def download_via_socialkit(video_url, dest_path):
+def download_via_socialkit(video_url, dest_path, method="aria2c"):
     """
     Исправленный SocialKit (теперь GET запрос).
     """
@@ -356,7 +360,7 @@ def download_via_socialkit(video_url, dest_path):
         if data.get("success"):
             direct_link = data["data"]["downloadUrl"]
             print(f"✅ [ArbiFlow]: Ссылка получена! Размер файла: {data['data'].get('fileSizeMB')} MB")
-            return download_file_fast(direct_link, dest_path)
+            return download_file_fast(direct_link, dest_path, method=method)
         else:
             print(f"❌ [ArbiFlow]: SocialKit API вернул ошибку: {data.get('message')}")
             return False
@@ -364,7 +368,7 @@ def download_via_socialkit(video_url, dest_path):
         print(f"🔥 [ArbiFlow]: SocialKit failed: {e}", flush=True)
         return False
 
-def download_via_rapidapi(video_url, dest_path):
+def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     """
     Стабильное скачивание видео в 1080p через RapidAPI для продакшена ArbiFlow.
     """
@@ -427,8 +431,8 @@ def download_via_rapidapi(video_url, dest_path):
             
             # Запускаем скачивание параллельно
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_v = executor.submit(download_file_fast, best_video_link, video_raw_path)
-                future_a = executor.submit(download_file_fast, best_audio_link, audio_raw_path)
+                future_v = executor.submit(download_file_fast, best_video_link, video_raw_path, method)
+                future_a = executor.submit(download_file_fast, best_audio_link, audio_raw_path, method)
                 
                 v_success = future_v.result()
                 a_success = future_a.result()
@@ -466,7 +470,7 @@ def download_via_rapidapi(video_url, dest_path):
                 
         else:
             print(f"⚠️ [ArbiFlow]: Отдельного аудио нет, качаем только видео (надеемся, что звук встроен).", flush=True)
-            return download_file_fast(best_video_link, dest_path)
+            return download_file_fast(best_video_link, dest_path, method=method)
 
     except Exception as e:
         print(f"🔥 [ArbiFlow]: Ошибка продакшен-загрузки: {e}", flush=True)
@@ -544,41 +548,46 @@ def handler(job):
             if is_url:
                 print(f"📥 [ArbiFlow Worker]: Starting download process...", flush=True)
                 
-                # 1. Сначала пробуем RapidAPI (самый надежный платный метод)
-                success = download_via_rapidapi(video_url, input_video)
+                # 1. RapidAPI + aria2c
+                print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
+                success = download_via_rapidapi(video_url, input_video, method="aria2c")
                 
+                # 2. SocialKit + aria2c
                 if not success:
-                    print(f"⚠️ [ArbiFlow Worker]: RapidAPI failed. Falling back to SocialKit API...", flush=True)
-                    success = download_via_socialkit(video_url, input_video)
+                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to SocialKit API...", flush=True)
+                    success = download_via_socialkit(video_url, input_video, method="aria2c")
                     
-                    if not success:
-                        print(f"⚠️ [ArbiFlow Worker]: SocialKit failed. Falling back to Telegram Bots...", flush=True)
-                        try:
-                            import asyncio
-                            # Need to import here to avoid circular imports or missing modules at top level if not installed
-                            from telegram_downloader.worker import download_via_telegram
-                            
-                            # ПРАВИЛЬНО:
-                            # Получаем текущий цикл
-                            loop = asyncio.get_event_loop()
-                            success = loop.run_until_complete(download_via_telegram(video_url, input_video))
-                            
-                            if success:
-                                print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
-                            else:
-                                print(f"❌ [ArbiFlow Worker]: Telegram Bots failed to download video.", flush=True)
-                        except Exception as e:
-                            print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
-                            success = False
+                # 3. Telegram Bots
+                if not success:
+                    print(f"3️⃣ [ArbiFlow Worker]: SocialKit failed. Falling back to Telegram Bots...", flush=True)
+                    try:
+                        import asyncio
+                        # Need to import here to avoid circular imports or missing modules at top level if not installed
+                        from telegram_downloader.worker import download_via_telegram
+                        
+                        # Получаем текущий цикл
+                        loop = asyncio.get_event_loop()
+                        success = loop.run_until_complete(download_via_telegram(video_url, input_video))
+                        
+                        if success:
+                            print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
+                        else:
+                            print(f"❌ [ArbiFlow Worker]: Telegram Bots failed to download video.", flush=True)
+                    except Exception as e:
+                        print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
+                        success = False
 
-                    if not success:
-                        raise Exception("Все методы скачивания (RapidAPI, SocialKit, Telegram) завершились с ошибкой.")
-                    else:
-                        if success and not os.path.exists(input_video):
-                            # Just in case
-                            pass
+                # 4. RapidAPI + requests
+                if not success:
+                    print(f"4️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
+                    success = download_via_rapidapi(video_url, input_video, method="requests")
+
+                if not success:
+                    raise Exception("Все методы скачивания (RapidAPI, SocialKit, Telegram, requests) завершились с ошибкой.")
                 else:
-                    print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
+                    if success and not os.path.exists(input_video):
+                        # Just in case
+                        pass
             
             # 2. Transcribing (с подробным дебагом)
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
