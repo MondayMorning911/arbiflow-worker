@@ -412,60 +412,56 @@ def download_via_rapidapi(video_url, dest_path):
         response.raise_for_status()
         data = response.json()
 
-        # Список доступных комбинированных ссылок (видео + аудио)
-        items = data.get("videos", {}).get("items", [])
-        if not items:
-            print(f"❌ [ArbiFlow]: API не вернул доступных ссылок для ID: {video_id}", flush=True)
+        # 1. Ищем видео 1080p
+        video_items = data.get("videos", {}).get("items", [])
+        if not video_items:
+            print(f"❌ [ArbiFlow]: API не вернул доступных видео ссылок для ID: {video_id}", flush=True)
             return False
             
-        link_1080p_audio = None
-        link_1080p_no_audio = None
-        link_720p_audio = None
-        fallback_link = None
-        
-        for item in items:
-            q = item.get("quality", "")
-            has_audio = item.get("hasAudio", False)
-            
-            if q == "1080p":
-                if has_audio:
-                    link_1080p_audio = item.get("url")
-                elif not link_1080p_no_audio:
-                    link_1080p_no_audio = item.get("url")
-            elif q == "720p":
-                if has_audio and not link_720p_audio:
-                    link_720p_audio = item.get("url")
-                    
-            if has_audio and not fallback_link:
-                fallback_link = item.get("url")
+        best_video_link = None
+        for item in video_items:
+            if item.get("quality") == "1080p":
+                best_video_link = item.get("url")
+                print(f"💎 [ArbiFlow]: Найдено видео 1080p.", flush=True)
+                break
+                
+        if not best_video_link:
+            best_video_link = video_items[0].get("url")
+            print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано качество: {video_items[0].get('quality')}", flush=True)
 
-        if link_1080p_audio:
-            print(f"💎 [ArbiFlow]: Найдено 1080p со звуком.", flush=True)
-            return download_file_fast(link_1080p_audio, dest_path)
-            
-        elif link_1080p_no_audio and link_720p_audio:
-            print(f"🔧 [ArbiFlow]: 1080p без звука. Будем склеивать видео 1080p и аудио из 720p.", flush=True)
+        # 2. Ищем лучшее аудио
+        audio_items = data.get("audios", {}).get("items", [])
+        best_audio_link = None
+        if audio_items:
+            best_audio_link = audio_items[0].get("url")
+            print(f"🎵 [ArbiFlow]: Найдена отдельная аудиодорожка.", flush=True)
+
+        # 3. Скачиваем и склеиваем
+        if best_audio_link:
+            print(f"📥 [ArbiFlow]: Скачиваем видео и аудио параллельно...", flush=True)
             
             import os
             import subprocess
+            import concurrent.futures
             
-            video_only_path = dest_path.replace(".mp4", "_video_only.mp4")
-            audio_source_path = dest_path.replace(".mp4", "_audio_source.mp4")
+            video_raw_path = dest_path.replace(".mp4", "_video_raw.mp4")
+            audio_raw_path = dest_path.replace(".mp4", "_audio_raw.m4a")
             
-            print(f"📥 [ArbiFlow]: Скачиваем 1080p (только видео)...", flush=True)
-            v_success = download_file_fast(link_1080p_no_audio, video_only_path)
-            
-            print(f"📥 [ArbiFlow]: Скачиваем 720p (со звуком)...", flush=True)
-            a_success = download_file_fast(link_720p_audio, audio_source_path)
+            # Запускаем скачивание параллельно
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_v = executor.submit(download_file_fast, best_video_link, video_raw_path)
+                future_a = executor.submit(download_file_fast, best_audio_link, audio_raw_path)
+                
+                v_success = future_v.result()
+                a_success = future_a.result()
             
             if v_success and a_success:
                 print(f"🎬 [ArbiFlow]: Склеиваем видео и аудио через FFmpeg...", flush=True)
                 merge_cmd = [
                     "ffmpeg", "-y",
-                    "-i", video_only_path,
-                    "-i", audio_source_path,
-                    "-c:v", "copy",
-                    "-c:a", "aac",
+                    "-i", video_raw_path,
+                    "-i", audio_raw_path,
+                    "-c", "copy",
                     "-map", "0:v:0",
                     "-map", "1:a:0",
                     dest_path
@@ -474,33 +470,25 @@ def download_via_rapidapi(video_url, dest_path):
                     process = subprocess.run(merge_cmd, capture_output=True)
                     if process.returncode == 0:
                         print(f"✅ [ArbiFlow]: Склейка успешно завершена!", flush=True)
-                        if os.path.exists(video_only_path): os.remove(video_only_path)
-                        if os.path.exists(audio_source_path): os.remove(audio_source_path)
+                        if os.path.exists(video_raw_path): os.remove(video_raw_path)
+                        if os.path.exists(audio_raw_path): os.remove(audio_raw_path)
                         return True
                     else:
                         print(f"❌ [ArbiFlow]: Ошибка склейки FFmpeg: {process.stderr.decode('utf-8', errors='ignore')}", flush=True)
                 except Exception as e:
                     print(f"❌ [ArbiFlow]: Ошибка запуска FFmpeg: {e}", flush=True)
             
-            # Если склейка не удалась, фолбэк на 720p
-            print(f"⚠️ [ArbiFlow]: Склейка не удалась, используем 720p со звуком.", flush=True)
-            if a_success and os.path.exists(audio_source_path):
+            # Если склейка не удалась, пробуем просто вернуть видео (вдруг там есть звук)
+            print(f"⚠️ [ArbiFlow]: Склейка не удалась, используем только видеофайл.", flush=True)
+            if v_success and os.path.exists(video_raw_path):
                 import shutil
-                shutil.move(audio_source_path, dest_path)
-                if os.path.exists(video_only_path): os.remove(video_only_path)
+                shutil.move(video_raw_path, dest_path)
+                if os.path.exists(audio_raw_path): os.remove(audio_raw_path)
                 return True
                 
-        elif link_720p_audio:
-            print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано 720p со звуком.", flush=True)
-            return download_file_fast(link_720p_audio, dest_path)
-            
-        elif fallback_link:
-            print(f"⚠️ [ArbiFlow]: Выбрано резервное качество со звуком.", flush=True)
-            return download_file_fast(fallback_link, dest_path)
-            
         else:
-            print(f"⚠️ [ArbiFlow]: Не найдено видео со звуком! Пробуем скачать первое попавшееся.", flush=True)
-            return download_file_fast(items[0].get("url"), dest_path)
+            print(f"⚠️ [ArbiFlow]: Отдельного аудио нет, качаем только видео (надеемся, что звук встроен).", flush=True)
+            return download_file_fast(best_video_link, dest_path)
 
     except Exception as e:
         print(f"🔥 [ArbiFlow]: Ошибка продакшен-загрузки: {e}", flush=True)
