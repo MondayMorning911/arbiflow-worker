@@ -351,6 +351,41 @@ def download_via_socialkit(video_url, dest_path):
         print(f"🔥 [ArbiFlow]: Ошибка скачивания через SocialKit: {e}", flush=True)
         return False
 
+def download_file_fast(link, dest_path):
+    import subprocess
+    import os
+    print(f"🚀 [ArbiFlow]: Пробую aria2c для {os.path.basename(dest_path)}...", flush=True)
+    cmd = [
+        "aria2c", "-x", "16", "-s", "16", "-k", "1M",
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "--check-certificate=false",
+        link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
+    ]
+    try:
+        process = subprocess.run(cmd, capture_output=True)
+        if process.returncode == 0:
+            print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+            return True
+        else:
+            print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
+
+    print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
+    axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, link]
+    try:
+        process_axel = subprocess.run(axel_cmd, capture_output=True)
+        if process_axel.returncode == 0:
+            print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+            return True
+        else:
+            print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
+
+    print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
+    return False
+
 def download_via_rapidapi(video_url, dest_path):
     """
     Стабильное скачивание видео в 1080p через RapidAPI для продакшена ArbiFlow.
@@ -383,60 +418,89 @@ def download_via_rapidapi(video_url, dest_path):
             print(f"❌ [ArbiFlow]: API не вернул доступных ссылок для ID: {video_id}", flush=True)
             return False
             
-        # 🎯 Поиск 1080p
-        final_link = None
+        link_1080p_audio = None
+        link_1080p_no_audio = None
+        link_720p_audio = None
+        fallback_link = None
+        
         for item in items:
-            if item.get("quality") == "1080p":
-                final_link = item.get("url")
-                print(f"💎 [ArbiFlow]: Качество 1080p подтверждено.", flush=True)
-                break
-        
-        # Фолбэк: если 1080p нет, берем самую первую (лучшую) ссылку
-        if not final_link:
-            final_link = items[0].get("url")
-            print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано качество: {items[0].get('quality')}", flush=True)
+            q = item.get("quality", "")
+            has_audio = item.get("hasAudio", False)
+            
+            if q == "1080p":
+                if has_audio:
+                    link_1080p_audio = item.get("url")
+                elif not link_1080p_no_audio:
+                    link_1080p_no_audio = item.get("url")
+            elif q == "720p":
+                if has_audio and not link_720p_audio:
+                    link_720p_audio = item.get("url")
+                    
+            if has_audio and not fallback_link:
+                fallback_link = item.get("url")
 
-        print(f"🔗 [ArbiFlow]: Direct link (first 100 chars): {final_link[:100]}...", flush=True)
-
-        # 3. Загрузка файла на RunPod
-        print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
-        
-        # 🎯 ПОПЫТКА 1: aria2c (16 потоков)
-        print(f"🚀 [ArbiFlow]: Пробую aria2c...", flush=True)
-        # Добавляем --user-agent, чтобы Google меньше ругался
-        cmd = [
-            "aria2c", "-x", "16", "-s", "16", "-k", "1M",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--check-certificate=false",
-            final_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
-        ]
-        
-        try:
+        if link_1080p_audio:
+            print(f"💎 [ArbiFlow]: Найдено 1080p со звуком.", flush=True)
+            return download_file_fast(link_1080p_audio, dest_path)
+            
+        elif link_1080p_no_audio and link_720p_audio:
+            print(f"🔧 [ArbiFlow]: 1080p без звука. Будем склеивать видео 1080p и аудио из 720p.", flush=True)
+            
+            import os
             import subprocess
-            process = subprocess.run(cmd, capture_output=True)
-            if process.returncode == 0:
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+            
+            video_only_path = dest_path.replace(".mp4", "_video_only.mp4")
+            audio_source_path = dest_path.replace(".mp4", "_audio_source.mp4")
+            
+            print(f"📥 [ArbiFlow]: Скачиваем 1080p (только видео)...", flush=True)
+            v_success = download_file_fast(link_1080p_no_audio, video_only_path)
+            
+            print(f"📥 [ArbiFlow]: Скачиваем 720p (со звуком)...", flush=True)
+            a_success = download_file_fast(link_720p_audio, audio_source_path)
+            
+            if v_success and a_success:
+                print(f"🎬 [ArbiFlow]: Склеиваем видео и аудио через FFmpeg...", flush=True)
+                merge_cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_only_path,
+                    "-i", audio_source_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    dest_path
+                ]
+                try:
+                    process = subprocess.run(merge_cmd, capture_output=True)
+                    if process.returncode == 0:
+                        print(f"✅ [ArbiFlow]: Склейка успешно завершена!", flush=True)
+                        if os.path.exists(video_only_path): os.remove(video_only_path)
+                        if os.path.exists(audio_source_path): os.remove(audio_source_path)
+                        return True
+                    else:
+                        print(f"❌ [ArbiFlow]: Ошибка склейки FFmpeg: {process.stderr.decode('utf-8', errors='ignore')}", flush=True)
+                except Exception as e:
+                    print(f"❌ [ArbiFlow]: Ошибка запуска FFmpeg: {e}", flush=True)
+            
+            # Если склейка не удалась, фолбэк на 720p
+            print(f"⚠️ [ArbiFlow]: Склейка не удалась, используем 720p со звуком.", flush=True)
+            if a_success and os.path.exists(audio_source_path):
+                import shutil
+                shutil.move(audio_source_path, dest_path)
+                if os.path.exists(video_only_path): os.remove(video_only_path)
                 return True
-            else:
-                print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
-
-        # 🎯 ПОПЫТКА 2: axel (Аналог, если aria2c упал с кодом 22)
-        print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
-        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, final_link]
-        try:
-            process_axel = subprocess.run(axel_cmd, capture_output=True)
-            if process_axel.returncode == 0:
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-                return True
-            else:
-                print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
-
-        print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
-        return False
+                
+        elif link_720p_audio:
+            print(f"⚠️ [ArbiFlow]: 1080p недоступно, выбрано 720p со звуком.", flush=True)
+            return download_file_fast(link_720p_audio, dest_path)
+            
+        elif fallback_link:
+            print(f"⚠️ [ArbiFlow]: Выбрано резервное качество со звуком.", flush=True)
+            return download_file_fast(fallback_link, dest_path)
+            
+        else:
+            print(f"⚠️ [ArbiFlow]: Не найдено видео со звуком! Пробуем скачать первое попавшееся.", flush=True)
+            return download_file_fast(items[0].get("url"), dest_path)
 
     except Exception as e:
         print(f"🔥 [ArbiFlow]: Ошибка продакшен-загрузки: {e}", flush=True)
