@@ -135,60 +135,37 @@ def init_face_detector():
 def get_face_center_x(video_path, start_time, duration, original_width):
     try:
         init_face_detector()
-        
-        if face_detection_method == "disabled":
+        # Если MediaPipe отключен или не сработал — используем только OpenCV или центр
+        if face_detection_method != "opencv" or cv2_face_cascade_instance is None:
             return original_width // 2
             
         cap = cv2.VideoCapture(video_path)
-        
-        # Берем кадры каждые 2 секунды для более точного отслеживания
         sample_interval = 2.0
         num_samples = max(3, int(duration / sample_interval))
         sample_times = [start_time + i * (duration / num_samples) for i in range(num_samples)]
         
         x_coords = []
-        
         for t in sample_times:
-            if t < 0: t = 0
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0, t * 1000))
             ret, frame = cap.read()
             if not ret or frame is None: continue
             
-            # Сначала пробуем OpenCV, если он выбран
-            if face_detection_method == "opencv" and cv2_face_cascade_instance:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
-                if faces is not None and len(faces) > 0:
-                    faces_list = sorted(faces, key=lambda x: x[2]*x[3], reverse=True)
-                    x, y, w, h = faces_list[0]
-                    center_x = x + w / 2
-                    x_coords.append(center_x)
-                    continue # Нашли лицо через OpenCV, идем к следующему кадру
-
-            # Если OpenCV не нашел или не инициализирован, пробуем MediaPipe
-            if face_detection_method == "mediapipe" and mp_face_detection_instance:
-                results = mp_face_detection_instance.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                if results and results.detections:
-                    valid_detections = [d for d in results.detections if hasattr(d, 'score') and d.score and len(d.score) > 0]
-                    if valid_detections:
-                        best_detection = max(valid_detections, key=lambda d: d.score[0])
-                        bbox = best_detection.location_data.relative_bounding_box
-                        center_x = (bbox.xmin + bbox.width / 2) * original_width
-                        x_coords.append(center_x)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cv2_face_cascade_instance.detectMultiScale(gray, 1.1, 6, minSize=(60, 60))
+            
+            # Безопасная проверка: faces может быть кортежем или массивом
+            if faces is not None and len(faces) > 0:
+                faces_list = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)
+                x, y, w, h = faces_list[0]
+                x_coords.append(x + w / 2)
         
         cap.release()
-        
         if x_coords:
-            # Используем медиану, чтобы исключить резкие движения или ошибки детекции
             x_coords.sort()
-            median_x = x_coords[len(x_coords) // 2]
-            print(f"🎯 [ArbiFlow Worker]: Face detected in {len(x_coords)}/{len(sample_times)} frames. Median X: {median_x:.1f}")
-            return int(median_x)
-            
-        print("👤 [ArbiFlow Worker]: No faces detected in any frames. Falling back to center.")
+            return int(x_coords[len(x_coords) // 2])
         return original_width // 2
     except Exception as e:
-        print(f"⚠️ [ArbiFlow Worker]: Face detection failed: {e}")
+        print(f"⚠️ [ArbiFlow]: Face detection failed safe: {e}")
         return original_width // 2
 
 def download_file(url, dest):
@@ -683,11 +660,12 @@ def handler(job):
                     resp.raise_for_status()
                     
                     data = resp.json()
-                    if not data.get('choices'):
+                    choices = data.get('choices', [])
+                    if not choices:
                         print(f"⚠️ [ArbiFlow]: AI вернул пустой ответ (no choices) для блока {block['id']}")
                         return []
                         
-                    content = data['choices'][0]['message']['content']
+                    content = choices[0].get('message', {}).get('content', '')
                     
                     # БЕЗОПАСНЫЙ ПАРСИНГ MARKDOWN
                     if "```json" in content:
@@ -779,11 +757,12 @@ def handler(job):
                 resp.raise_for_status()
                 
                 data = resp.json()
-                if not data.get('choices'):
+                choices = data.get('choices', [])
+                if not choices:
                     print(f"⚠️ [ArbiFlow]: AI вернул пустой ответ (no choices) для глобального отбора")
                     clips_data = top_scenes[:5]
                 else:
-                    content = data['choices'][0]['message']['content']
+                    content = choices[0].get('message', {}).get('content', '')
                     
                     # БЕЗОПАСНЫЙ ПАРСИНГ MARKDOWN
                     if "```json" in content:
@@ -911,11 +890,18 @@ def handler(job):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                     futures = [executor.submit(process_clip, i, clip) for i, clip in enumerate(clips_data)]
                     for future in concurrent.futures.as_completed(futures):
-                        clip_path, clip_filename, desc, idx = future.result()
-                        if clip_path and os.path.exists(clip_path):
-                            zipf.write(clip_path, arcname=clip_filename)
-                            results_data.append((idx, desc))
-                            cleanup_list.append(clip_path)
+                        try:
+                            result = future.result()
+                            if result and len(result) == 4:
+                                clip_path, clip_filename, desc, idx = result
+                                if clip_path and os.path.exists(clip_path):
+                                    zipf.write(clip_path, arcname=clip_filename)
+                                    results_data.append((idx, desc))
+                                    cleanup_list.append(clip_path)
+                            else:
+                                print(f"⚠️ [ArbiFlow Worker]: process_clip returned unexpected result: {result}", file=sys.stderr)
+                        except Exception as e:
+                            print(f"❌ [ArbiFlow Worker]: Exception during future.result(): {e}", file=sys.stderr)
                             
                 # Сортируем описания по порядку клипов (1, 2, 3...)
                 results_data.sort(key=lambda x: x[0])
