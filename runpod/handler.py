@@ -20,7 +20,6 @@ print("🚀 [ArbiFlow Worker]: Starting initialization...", flush=True)
 load_dotenv()
 
 try:
-    import yt_dlp
     from google import genai
     from google.genai import types
     import edge_tts
@@ -286,6 +285,72 @@ def extract_video_id(url):
         return match.group(1)
     return url
 
+def download_via_socialkit(video_url, dest_path):
+    """
+    Резервное скачивание видео через SocialKit API.
+    """
+    print(f"📡 [ArbiFlow]: Получение прямой ссылки через SocialKit...", flush=True)
+    
+    url = "https://api.socialkit.dev/youtube/download"
+    headers = {
+        "x-access-key": "1pnc5NYxqOCYpt",
+        "Content-Type": "application/json"
+    }
+    payload = {"url": video_url}
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        direct_link = data.get("downloadUrl")
+        if not direct_link:
+            print(f"❌ [ArbiFlow]: SocialKit API не вернул downloadUrl", flush=True)
+            return False
+            
+        print(f"🔗 [ArbiFlow]: SocialKit Direct link (first 100 chars): {direct_link[:100]}...", flush=True)
+        print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
+        
+        # 🎯 ПОПЫТКА 1: aria2c (16 потоков)
+        print(f"🚀 [ArbiFlow]: Пробую aria2c...", flush=True)
+        cmd = [
+            "aria2c", "-x", "16", "-s", "16", "-k", "1M",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--check-certificate=false",
+            direct_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
+        ]
+        
+        try:
+            import subprocess
+            process = subprocess.run(cmd, capture_output=True)
+            if process.returncode == 0:
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
+
+        # 🎯 ПОПЫТКА 2: axel
+        print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
+        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
+        try:
+            process_axel = subprocess.run(axel_cmd, capture_output=True)
+            if process_axel.returncode == 0:
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
+
+        print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
+        return False
+
+    except Exception as e:
+        print(f"🔥 [ArbiFlow]: Ошибка скачивания через SocialKit: {e}", flush=True)
+        return False
+
 def download_via_rapidapi(video_url, dest_path):
     """
     Стабильное скачивание видео в 1080p через RapidAPI для продакшена ArbiFlow.
@@ -343,7 +408,7 @@ def download_via_rapidapi(video_url, dest_path):
             "aria2c", "-x", "16", "-s", "16", "-k", "1M",
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "--check-certificate=false",
-            direct_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
+            final_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
         ]
         
         try:
@@ -359,7 +424,7 @@ def download_via_rapidapi(video_url, dest_path):
 
         # 🎯 ПОПЫТКА 2: axel (Аналог, если aria2c упал с кодом 22)
         print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
-        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
+        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, final_link]
         try:
             process_axel = subprocess.run(axel_cmd, capture_output=True)
             if process_axel.returncode == 0:
@@ -453,80 +518,13 @@ def handler(job):
                 success = download_via_rapidapi(video_url, input_video)
                 
                 if not success:
-                    print(f"⚠️ [ArbiFlow Worker]: RapidAPI failed. Falling back to verified Android-client...", flush=True)
+                    print(f"⚠️ [ArbiFlow Worker]: RapidAPI failed. Falling back to SocialKit API...", flush=True)
+                    success = download_via_socialkit(video_url, input_video)
                     
-                    # --- УМНАЯ ПРОВЕРКА КУКОВ ---
-                    cookies_content = job_input.get("cookies")
-                    cookies_path = None
-                    
-                    if cookies_content:
-                        # Если куки пришли в запросе от бота
-                        cookies_path = os.path.join(TEMP_PATH, f"cookies_{job_id}.txt")
-                        with open(cookies_path, "w") as f:
-                            f.write(cookies_content)
-                        print(f"🍪 [ArbiFlow Worker]: Using cookies from job input. (Size: {len(cookies_content)} bytes)", flush=True)
-                        if not cookies_content.strip().startswith("# Netscape"):
-                            print("⚠️ [ArbiFlow Worker]: Cookies might not be in Netscape format! (Should start with # Netscape)", flush=True)
+                    if not success:
+                        raise Exception("Все методы скачивания (RapidAPI и SocialKit) завершились с ошибкой.")
                     else:
-                        # Если в запросе нет, ищем файл cookies.txt в папке с кодом (внутри Docker)
-                        local_cookies = os.path.join(os.path.dirname(__file__), "cookies.txt")
-                        # Также проверим в корне /app
-                        root_cookies = "/app/cookies.txt"
-                        
-                        if os.path.exists(local_cookies):
-                            cookies_path = local_cookies
-                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from handler folder.", flush=True)
-                        elif os.path.exists(root_cookies):
-                            cookies_path = root_cookies
-                            print(f"🍪 [ArbiFlow Worker]: Using local cookies.txt from /app root.", flush=True)
-
-                    ydl_opts = {
-                        'format': 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
-                        'format_sort': ['res:1440', 'ext:mp4:m4a'],
-                        'outtmpl': input_video,
-                        'quiet': True,
-                        'no_warnings': True,
-                        'merge_output_format': 'mp4',
-                        'nocheckcertificate': True,
-                        'no_color': True,
-                        'youtube_skip_dash_manifest': True,
-                        'cachedir': False,
-                        'geo_bypass': True,
-                        'concurrent_fragment_downloads': 10,
-                        # Настройки из успешного теста:
-                        'extractor_args': {
-                            'youtube': {
-                                'player_client': ['ios', 'android', 'web'],
-                                'player_skip': ['web_embedded-player_mechanism']
-                            }
-                        },
-                        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    }
-                    
-                    # Пытаемся добавить aria2c в yt-dlp для ускорения фрагментов
-                    try:
-                        import subprocess
-                        subprocess.run(['aria2c', '--version'], capture_output=True, check=True)
-                        ydl_opts['external_downloader'] = 'aria2c'
-                        ydl_opts['external_downloader_args'] = ['-x', '16', '-s', '16', '-k', '1M']
-                        print(f"🚀 [ArbiFlow Worker]: Aria2c enabled for yt-dlp fallback.", flush=True)
-                    except:
-                        pass
-                    
-                    if cookies_path:
-                        ydl_opts['cookiefile'] = cookies_path
-                        print(f"✅ [ArbiFlow Worker]: Cookies applied for extra auth.", flush=True)
-
-                    try:
-                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                            ydl.download([video_url])
-                        print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via fallback.", flush=True)
-                    finally:
-                        # Удаляем только временный файл, созданный из запроса
-                        if cookies_content and cookies_path and os.path.exists(cookies_path) and "cookies_" in cookies_path:
-                            try:
-                                os.remove(cookies_path)
-                            except: pass
+                        print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via SocialKit.", flush=True)
                 else:
                     print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
             

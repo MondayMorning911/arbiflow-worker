@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 
 # Установка Python 3.10 и системных зависимостей
 RUN apt-get update && \
-    apt-get install -y python3.10 python3-pip ffmpeg aria2 fonts-liberation libgl1-mesa-glx libglib2.0-0 wget git && \
+    apt-get install -y python3.10 python3-pip ffmpeg aria2 axel fonts-liberation libgl1-mesa-glx libglib2.0-0 wget git && \
     rm -rf /var/lib/apt/lists/*
 
 # Делаем python3.10 основным python
@@ -21,8 +21,7 @@ COPY requirements.txt .
 # Установка Torch и остальных библиотек через pip (избегаем конфликтов conda)
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch==2.1.0+cu118 --extra-index-url https://download.pytorch.org/whl/cu118 && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -U https://github.com/yt-dlp/yt-dlp/archive/master.tar.gz
+    pip install --no-cache-dir -r requirements.txt
 
 # Копируем все файлы проекта
 COPY . .
