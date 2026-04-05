@@ -1,5 +1,9 @@
 import os
 import sys
+
+# Add parent directory to sys.path so we can import telegram_downloader
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import uuid
 import requests
 import runpod
@@ -285,106 +289,76 @@ def extract_video_id(url):
         return match.group(1)
     return url
 
-def download_via_socialkit(video_url, dest_path):
+def download_file_fast(direct_link, dest_path):
     """
-    Резервное скачивание видео через SocialKit API.
+    Самый надежный метод скачивания сверхдлинных ссылок.
     """
-    print(f"📡 [ArbiFlow]: Получение прямой ссылки через SocialKit...", flush=True)
-    
-    url = "https://api.socialkit.dev/youtube/download"
-    headers = {
-        "x-access-key": "1pnc5NYxqOCYpt",
-        "Content-Type": "application/json"
-    }
-    payload = {"url": video_url}
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        
-        direct_link = data.get("downloadUrl")
-        if not direct_link:
-            print(f"❌ [ArbiFlow]: SocialKit API не вернул downloadUrl", flush=True)
-            return False
-            
-        print(f"🔗 [ArbiFlow]: SocialKit Direct link (first 100 chars): {direct_link[:100]}...", flush=True)
-        print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
-        
-        # 🎯 ПОПЫТКА 1: aria2c (16 потоков)
-        print(f"🚀 [ArbiFlow]: Пробую aria2c...", flush=True)
-        cmd = [
-            "aria2c", "-x", "16", "-s", "16", "-k", "1M",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--check-certificate=false",
-            direct_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
-        ]
-        
-        try:
-            import subprocess
-            process = subprocess.run(cmd, capture_output=True)
-            if process.returncode == 0:
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-                return True
-            else:
-                print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
-
-        # 🎯 ПОПЫТКА 2: axel
-        print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
-        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
-        try:
-            process_axel = subprocess.run(axel_cmd, capture_output=True)
-            if process_axel.returncode == 0:
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-                return True
-            else:
-                print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
-
-        print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
-        return False
-
-    except Exception as e:
-        print(f"🔥 [ArbiFlow]: Ошибка скачивания через SocialKit: {e}", flush=True)
-        return False
-
-def download_file_fast(link, dest_path):
     import subprocess
     import os
-    print(f"🚀 [ArbiFlow]: Пробую aria2c для {os.path.basename(dest_path)}...", flush=True)
-    cmd = [
-        "aria2c", "-x", "16", "-s", "16", "-k", "1M",
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "--check-certificate=false",
-        link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
-    ]
+    
+    # Создаем временный файл со ссылкой (решает проблему длины)
+    url_file = dest_path + ".url.txt"
+    with open(url_file, "w") as f:
+        f.write(direct_link)
+        
     try:
+        print(f"🚀 [ArbiFlow]: Запуск aria2c (через url-file)...", flush=True)
+        cmd = [
+            "aria2c", 
+            "-i", url_file,           # Читаем ссылку из файла
+            "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--check-certificate=false",
+            "--file-allocation=none",
+            "-o", os.path.basename(dest_path), 
+            "-d", os.path.dirname(dest_path)
+        ]
+        
         process = subprocess.run(cmd, capture_output=True)
         if process.returncode == 0:
             print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
             return True
         else:
-            print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-    except Exception as e:
-        print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
+            print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode}). Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+            
+            print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую requests (медленно, но надежно)...", flush=True)
+            try:
+                import requests
+                response = requests.get(direct_link, stream=True, timeout=300)
+                response.raise_for_status()
+                with open(dest_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через requests ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            except Exception as e:
+                print(f"⚠️ [ArbiFlow]: Ошибка при скачивании через requests: {e}", flush=True)
+            
+            return False
+    finally:
+        if os.path.exists(url_file): os.remove(url_file)
 
-    print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
-    axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, link]
+def download_via_socialkit(video_url, dest_path):
+    """
+    Исправленный SocialKit (теперь GET запрос).
+    """
+    print(f"📡 [ArbiFlow]: Пробую SocialKit (GET)...", flush=True)
+    access_key = "1pnc5NYxqOCYpt" # Твой ключ
+    api_url = "https://api.socialkit.dev/youtube/download"
+    
     try:
-        process_axel = subprocess.run(axel_cmd, capture_output=True)
-        if process_axel.returncode == 0:
-            print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-            return True
-        else:
-            print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+        # ВАЖНО: Используем params=, а не json=
+        response = requests.get(api_url, params={"access_key": access_key, "url": video_url}, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("success"):
+            direct_link = data["data"]["download_url"]
+            return download_file_fast(direct_link, dest_path)
+        return False
     except Exception as e:
-        print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
-
-    print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
-    return False
+        print(f"🔥 [ArbiFlow]: SocialKit failed: {e}", flush=True)
+        return False
 
 def download_via_rapidapi(video_url, dest_path):
     """
