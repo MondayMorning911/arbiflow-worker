@@ -528,13 +528,19 @@ def handler(job):
                 else:
                     print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
             
-            # 2. Transcribe
+            # 2. Transcribe (Безопасный режим без word_timestamps)
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
             model_instance = get_whisper_model()
-            segments, info = model_instance.transcribe(input_video, beam_size=5, word_timestamps=True, vad_filter=True)
+            # Устанавливаем word_timestamps=False, чтобы избежать ошибки tuple index out of range
+            segments, info = model_instance.transcribe(input_video, beam_size=5, word_timestamps=False, vad_filter=True)
             
             transcript = ""
-            segments_list = list(segments)
+            try:
+                print(f"⏳ [ArbiFlow]: Starting generation from segments...", flush=True)
+                segments_list = list(segments) # Именно здесь происходил краш
+            except Exception as e:
+                print(f"❌ [ArbiFlow]: Whisper failed during iteration: {e}")
+                raise Exception(f"Whisper transcription error: {e}")
             
             if not segments_list:
                 raise Exception("No speech segments detected in the video.")
@@ -549,7 +555,8 @@ def handler(job):
             blocks = []
             current_block_segs = []
             
-            block_start_time = segments_list[0].start
+            # Безопасное получение времени начала
+            block_start_time = segments_list[0].start if segments_list else 0
 
             MIN_BLOCK_DURATION = 120  # Минимальный блок 2 минуты
             MAX_BLOCK_DURATION = 420  # Максимальный блок 7 минут
