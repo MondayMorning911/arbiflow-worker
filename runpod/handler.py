@@ -528,18 +528,50 @@ def handler(job):
                 else:
                     print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
             
-            # 2. Transcribe (Безопасный режим без word_timestamps)
+            # 2. Transcribing (с подробным дебагом)
             print(f"📝 [ArbiFlow Worker]: Transcribing video...", flush=True)
             model_instance = get_whisper_model()
-            # Устанавливаем word_timestamps=False, чтобы избежать ошибки tuple index out of range
-            segments, info = model_instance.transcribe(input_video, beam_size=5, word_timestamps=False, vad_filter=True)
-            
+
+            # === НОВОЕ: проверка файла перед транскрипцией ===
+            print(f"🔍 [ArbiFlow]: Проверяем файл {os.path.basename(input_video)} ({os.path.getsize(input_video)/1024/1024:.1f} MB)", flush=True)
+            try:
+                probe = ffmpeg.probe(input_video)
+                audio_streams = [s for s in probe['streams'] if s['codec_type'] == 'audio']
+                video_streams = [s for s in probe['streams'] if s['codec_type'] == 'video']
+                print(f"✅ FFmpeg probe OK: {len(video_streams)} видео, {len(audio_streams)} аудио потоков", flush=True)
+                if not audio_streams:
+                    raise Exception("В видео отсутствует аудио-трек!")
+            except Exception as probe_err:
+                print(f"❌ [ArbiFlow]: FFmpeg probe failed: {probe_err}", flush=True)
+                raise Exception(f"Файл повреждён или не содержит аудио: {probe_err}")
+
+            # === Сама транскрипция с защитой ===
+            try:
+                print(f"🚀 [ArbiFlow]: Запускаем Whisper transcribe (beam=5, word_timestamps=False, vad_filter=True)...", flush=True)
+                segments, info = model_instance.transcribe(
+                    input_video,
+                    beam_size=5,
+                    word_timestamps=False,      # оставляем False — он спасал от tuple index
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500)
+                )
+                print(f"✅ [ArbiFlow]: Whisper transcribe setup OK. Язык: {info.language} (prob {info.language_probability:.2f})", flush=True)
+            except Exception as transcribe_err:
+                print(f"❌ [ArbiFlow]: ОШИБКА В model.transcribe(): {transcribe_err}", flush=True)
+                import traceback
+                traceback.print_exc()
+                raise Exception(f"Whisper transcribe failed: {transcribe_err}")
+
+            # === Итерация сегментов (была главной точкой краша раньше) ===
             transcript = ""
             try:
                 print(f"⏳ [ArbiFlow]: Starting generation from segments...", flush=True)
-                segments_list = list(segments) # Именно здесь происходил краш
+                segments_list = list(segments)   # <- здесь раньше был tuple index out of range
+                print(f"✅ [ArbiFlow]: Получено {len(segments_list)} сегментов", flush=True)
             except Exception as e:
-                print(f"❌ [ArbiFlow]: Whisper failed during iteration: {e}")
+                print(f"❌ [ArbiFlow]: Whisper failed during iteration: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 raise Exception(f"Whisper transcription error: {e}")
             
             if not segments_list:
@@ -930,7 +962,11 @@ def handler(job):
         err_msg = fe.stderr.decode() if fe.stderr else str(fe)
         return {"status": "error", "message": f"FFmpeg Error: {err_msg}", "traceback": traceback.format_exc()}
     except Exception as e:
-        return {"status": "error", "message": str(e), "traceback": traceback.format_exc()}
+        import traceback
+        err_msg = str(e)
+        print(f"❌ [ArbiFlow Worker]: НЕОЖИДАННАЯ ОШИБКА В handler: {err_msg}", flush=True)
+        traceback.print_exc()
+        return {"status": "error", "message": err_msg, "traceback": traceback.format_exc()}
     finally:
         for f in cleanup_list:
             if f and os.path.exists(f):
