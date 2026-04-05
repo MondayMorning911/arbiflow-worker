@@ -307,7 +307,8 @@ def download_file_fast(direct_link, dest_path):
             "aria2c", 
             "-i", url_file,           # Читаем ссылку из файла
             "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "--referer=https://www.youtube.com/",
             "--check-certificate=false",
             "--file-allocation=none",
             "-o", os.path.basename(dest_path), 
@@ -348,14 +349,17 @@ def download_via_socialkit(video_url, dest_path):
     
     try:
         # ВАЖНО: Используем params=, а не json=
-        response = requests.get(api_url, params={"access_key": access_key, "url": video_url}, timeout=30)
+        response = requests.get(api_url, params={"access_key": access_key, "url": video_url, "quality": "1080p"}, timeout=40)
         response.raise_for_status()
         data = response.json()
         
         if data.get("success"):
-            direct_link = data["data"]["download_url"]
+            direct_link = data["data"]["downloadUrl"]
+            print(f"✅ [ArbiFlow]: Ссылка получена! Размер файла: {data['data'].get('fileSizeMB')} MB")
             return download_file_fast(direct_link, dest_path)
-        return False
+        else:
+            print(f"❌ [ArbiFlow]: SocialKit API вернул ошибку: {data.get('message')}")
+            return False
     except Exception as e:
         print(f"🔥 [ArbiFlow]: SocialKit failed: {e}", flush=True)
         return False
@@ -553,9 +557,16 @@ def handler(job):
                             import asyncio
                             # Need to import here to avoid circular imports or missing modules at top level if not installed
                             from telegram_downloader.worker import download_via_telegram
-                            asyncio.run(download_via_telegram(video_url, input_video))
-                            success = True
-                            print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
+                            
+                            # ПРАВИЛЬНО:
+                            # Получаем текущий цикл
+                            loop = asyncio.get_event_loop()
+                            success = loop.run_until_complete(download_via_telegram(video_url, input_video))
+                            
+                            if success:
+                                print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
+                            else:
+                                print(f"❌ [ArbiFlow Worker]: Telegram Bots failed to download video.", flush=True)
                         except Exception as e:
                             print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
                             success = False
