@@ -336,61 +336,45 @@ def download_via_rapidapi(video_url, dest_path):
         # 3. Загрузка файла на RunPod
         print(f"📥 [ArbiFlow]: Начинаю загрузку в {dest_path}...", flush=True)
         
-        # Пытаемся использовать aria2c для многопоточного скачивания (максимальная скорость)
-        download_success = False
+        # 🎯 ПОПЫТКА 1: aria2c (16 потоков)
+        print(f"🚀 [ArbiFlow]: Пробую aria2c...", flush=True)
+        # Добавляем --user-agent, чтобы Google меньше ругался
+        cmd = [
+            "aria2c", "-x", "16", "-s", "16", "-k", "1M",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--check-certificate=false",
+            direct_link, "-o", os.path.basename(dest_path), "-d", os.path.dirname(dest_path)
+        ]
+        
         try:
             import subprocess
-            # Проверяем наличие aria2c
-            subprocess.run(['aria2c', '--version'], capture_output=True, check=True)
-            
-            print(f"🚀 [ArbiFlow]: Использование aria2c для многопоточного скачивания (16 потоков)...", flush=True)
-            # -x16 (соединений на сервер), -s16 (частей на файл), -k1M (минимальный размер части)
-            cmd = [
-                'aria2c', 
-                '--header', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                '--header', 'Referer: https://www.youtube.com/',
-                '-x', '16', 
-                '-s', '16', 
-                '-j', '16', 
-                '-k', '1M',
-                '--file-allocation=none', 
-                '--summary-interval=0',
-                '--check-certificate=false',
-                '--retry-wait=2',
-                '--max-tries=5',
-                '-o', os.path.basename(dest_path),
-                '-d', os.path.dirname(dest_path),
-                final_link
-            ]
-            subprocess.run(cmd, check=True, capture_output=True)
-            download_success = True
+            process = subprocess.run(cmd, capture_output=True)
+            if process.returncode == 0:
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: aria2c вернул код ошибки {process.returncode}. Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
         except Exception as e:
-            print(f"⚠️ [ArbiFlow]: aria2c недоступен или произошла ошибка, использую стандартный метод. ({e})", flush=True)
-            
-        if not download_success:
-            # Стандартный метод (fallback)
-            headers_dl = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Referer': 'https://www.youtube.com/'
-            }
-            with requests.get(final_link, stream=True, timeout=60, headers=headers_dl, verify=False) as r:
-                r.raise_for_status()
-                with open(dest_path, 'wb') as f:
-                    # Качаем кусками по 1МБ
-                    for chunk in r.iter_content(chunk_size=1024*1024): 
-                        if chunk:
-                            f.write(chunk)
-        
-        # Проверка, что файл реально создался и не пустой
-        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
-            print(f"✅ [ArbiFlow]: Файл успешно сохранен ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-            return True
-        else:
-            print("❌ [ArbiFlow]: Файл не был сохранен или он пустой", flush=True)
-            return False
+            print(f"⚠️ [ArbiFlow]: Ошибка при запуске aria2c: {e}", flush=True)
+
+        # 🎯 ПОПЫТКА 2: axel (Аналог, если aria2c упал с кодом 22)
+        print(f"🔄 [ArbiFlow]: aria2c не прошел, пробую axel...", flush=True)
+        axel_cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
+        try:
+            process_axel = subprocess.run(axel_cmd, capture_output=True)
+            if process_axel.returncode == 0:
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: axel вернул код ошибки {process_axel.returncode}. Вывод: {process_axel.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: Ошибка при запуске axel: {e}", flush=True)
+
+        print(f"❌ [ArbiFlow]: Все методы скоростного скачивания провалены.", flush=True)
+        return False
 
     except Exception as e:
-        print(f"🔥 [ArbiFlow]: Критическая ошибка при скачивании через RapidAPI: {e}", flush=True)
+        print(f"🔥 [ArbiFlow]: Ошибка продакшен-загрузки: {e}", flush=True)
         return False
 
 def handler(job):
