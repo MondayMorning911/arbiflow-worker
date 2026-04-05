@@ -522,9 +522,24 @@ def handler(job):
                     success = download_via_socialkit(video_url, input_video)
                     
                     if not success:
-                        raise Exception("Все методы скачивания (RapidAPI и SocialKit) завершились с ошибкой.")
+                        print(f"⚠️ [ArbiFlow Worker]: SocialKit failed. Falling back to Telegram Bots...", flush=True)
+                        try:
+                            import asyncio
+                            # Need to import here to avoid circular imports or missing modules at top level if not installed
+                            from telegram_downloader.worker import download_via_telegram
+                            asyncio.run(download_via_telegram(video_url, input_video))
+                            success = True
+                            print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
+                        except Exception as e:
+                            print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
+                            success = False
+
+                    if not success:
+                        raise Exception("Все методы скачивания (RapidAPI, SocialKit, Telegram) завершились с ошибкой.")
                     else:
-                        print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via SocialKit.", flush=True)
+                        if success and not os.path.exists(input_video):
+                            # Just in case
+                            pass
                 else:
                     print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via RapidAPI.", flush=True)
             
