@@ -363,25 +363,8 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
     # Гарантируем наличие папки
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     
-    # Пытаемся использовать axel (часто быстрее и надежнее aria2c в докере)
     if method == "aria2c":
-        print(f"🚀 [ArbiFlow]: Запуск axel (многопоточно) через прокси...", flush=True)
-        try:
-            # axel -n 16 -a -o dest_path direct_link
-            # Для axel прокси задается через переменную окружения
-            env = os.environ.copy()
-            env["all_proxy"] = PROXY_URL
-            cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
-            process = subprocess.run(cmd, capture_output=True, env=env)
-            if process.returncode == 0 and os.path.exists(dest_path):
-                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-                return True
-            else:
-                print(f"⚠️ [ArbiFlow]: axel failed, пробуем aria2c...", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: axel error: {e}", flush=True)
-
-        # Резерв: aria2c
+        # Резерв: aria2c (axel убрали по просьбе пользователя)
         url_file = dest_path + ".url.txt"
         with open(url_file, "w") as f:
             f.write(direct_link)
@@ -396,15 +379,18 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
                 "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "--check-certificate=false",
                 "--file-allocation=none",
+                "--max-connection-per-server=16",
+                "--split=16",
+                "--min-split-size=1M",
                 "-o", os.path.basename(dest_path), 
                 "-d", os.path.dirname(dest_path)
             ]
             process = subprocess.run(cmd, capture_output=True)
-            if process.returncode == 0 and os.path.exists(dest_path):
+            if process.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 100:
                 print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
                 return True
             else:
-                print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode})", flush=True)
+                print(f"⚠️ [ArbiFlow]: aria2c failed or file empty (code {process.returncode})", flush=True)
         except Exception as e:
             print(f"⚠️ [ArbiFlow]: aria2c error: {e}", flush=True)
         finally:
@@ -412,7 +398,7 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
             
         # Если системные утилиты не сработали, пробуем наш многопоточный Python-загрузчик
         if not os.path.exists(dest_path) or os.path.getsize(dest_path) < 100:
-            print(f"🔄 [ArbiFlow]: Системные утилиты не справились, пробуем Multi-threaded Python...", flush=True)
+            print(f"🔄 [ArbiFlow]: aria2c не справился, пробуем Multi-threaded Python...", flush=True)
             if download_file_multithreaded_python(direct_link, dest_path):
                 return True
             
