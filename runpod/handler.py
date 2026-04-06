@@ -289,6 +289,69 @@ def extract_video_id(url):
         return match.group(1)
     return url
 
+def download_file_multithreaded_python(url, dest, threads=8):
+    """
+    Многопоточное скачивание через Range headers на чистом Python.
+    Максимально ускоряет загрузку, если сервер поддерживает Range.
+    """
+    import requests
+    import concurrent.futures
+    import os
+
+    try:
+        # 1. Получаем размер файла
+        head = requests.head(url, timeout=10, allow_redirects=True)
+        file_size = int(head.headers.get('content-length', 0))
+        
+        # Если сервер не поддерживает Range или размер неизвестен - качаем обычно
+        if file_size <= 0 or head.headers.get('accept-ranges') != 'bytes' and 'content-range' not in head.headers:
+            print(f"⚠️ [ArbiFlow]: Сервер не поддерживает Range, качаем в один поток...", flush=True)
+            return False
+
+        print(f"🚀 [ArbiFlow]: Запуск многопоточного Python-загрузчика ({threads} потоков, {file_size/1024/1024:.1f} MB)...", flush=True)
+        
+        chunk_size = file_size // threads
+        futures = []
+        
+        # Создаем пустой файл нужного размера
+        with open(dest, 'wb') as f:
+            f.seek(file_size - 1)
+            f.write(b'\0')
+
+        def download_chunk(start, end, chunk_idx):
+            headers = {
+                'Range': f'bytes={start}-{end}',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            with requests.get(url, headers=headers, stream=True, timeout=60) as r:
+                r.raise_for_status()
+                with open(dest, 'r+b') as f:
+                    f.seek(start)
+                    # Стримим кусок для экономии памяти
+                    for chunk in r.iter_content(chunk_size=1024*1024): # 1MB
+                        if chunk:
+                            f.write(chunk)
+                            f.flush()
+                            os.fsync(f.fileno()) # Гарантируем запись на диск
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+            for i in range(threads):
+                start = i * chunk_size
+                end = (i + 1) * chunk_size - 1 if i < threads - 1 else file_size - 1
+                futures.append(executor.submit(download_chunk, start, end, i))
+            
+            # Ждем завершения всех потоков
+            concurrent.futures.wait(futures)
+            
+        # Проверяем финальный размер
+        if os.path.exists(dest) and os.path.getsize(dest) >= file_size:
+            print(f"✅ [ArbiFlow]: Многопоточный Python-загрузчик завершил работу!", flush=True)
+            return True
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow]: Ошибка многопоточного Python-загрузчика: {e}", flush=True)
+    
+    return False
+
 def download_file_fast(direct_link, dest_path, method="aria2c"):
     """
     Самый надежный метод скачивания сверхдлинных ссылок.
@@ -299,47 +362,72 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
     # Гарантируем наличие папки
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     
+    # Пытаемся использовать axel (часто быстрее и надежнее aria2c в докере)
     if method == "aria2c":
-        # Создаем временный файл со ссылкой (решает проблему длины)
+        print(f"🚀 [ArbiFlow]: Запуск axel (многопоточно)...", flush=True)
+        try:
+            # axel -n 16 -a -o dest_path direct_link
+            cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
+            process = subprocess.run(cmd, capture_output=True)
+            if process.returncode == 0 and os.path.exists(dest_path):
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
+            else:
+                print(f"⚠️ [ArbiFlow]: axel failed, пробуем aria2c...", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: axel error: {e}", flush=True)
+
+        # Резерв: aria2c
         url_file = dest_path + ".url.txt"
         with open(url_file, "w") as f:
             f.write(direct_link)
             
         try:
-            print(f"🚀 [ArbiFlow]: Запуск aria2c (через url-file)...", flush=True)
+            print(f"🚀 [ArbiFlow]: Запуск aria2c...", flush=True)
             cmd = [
                 "aria2c", 
-                "-i", url_file,           # Читаем ссылку из файла
+                "-i", url_file,
                 "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
-                "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-                "--referer=https://www.youtube.com/",
+                "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "--check-certificate=false",
                 "--file-allocation=none",
                 "-o", os.path.basename(dest_path), 
                 "-d", os.path.dirname(dest_path)
             ]
-            
             process = subprocess.run(cmd, capture_output=True)
-            if process.returncode == 0:
+            if process.returncode == 0 and os.path.exists(dest_path):
                 print(f"✅ [ArbiFlow]: Файл успешно сохранен через aria2c ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
                 return True
             else:
-                print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode}). Вывод: {process.stderr.decode('utf-8', errors='ignore')[:200]}", flush=True)
-                return False
+                print(f"⚠️ [ArbiFlow]: aria2c failed (code {process.returncode})", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: aria2c error: {e}", flush=True)
         finally:
             if os.path.exists(url_file): os.remove(url_file)
             
+        # Если системные утилиты не сработали, пробуем наш многопоточный Python-загрузчик
+        if not os.path.exists(dest_path) or os.path.getsize(dest_path) < 100:
+            print(f"🔄 [ArbiFlow]: Системные утилиты не справились, пробуем Multi-threaded Python...", flush=True)
+            if download_file_multithreaded_python(direct_link, dest_path):
+                return True
+            
     elif method == "requests":
-        print(f"🚀 [ArbiFlow]: Запуск requests (медленно, но надежно)...", flush=True)
+        print(f"🚀 [ArbiFlow]: Запуск ускоренного requests (1MB buffer)...", flush=True)
         try:
             import requests
-            response = requests.get(direct_link, stream=True, timeout=300)
-            response.raise_for_status()
-            with open(dest_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"✅ [ArbiFlow]: Файл успешно сохранен через requests ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
-            return True
+            # Увеличиваем таймаут и используем сессию для скорости
+            with requests.Session() as s:
+                response = s.get(direct_link, stream=True, timeout=300)
+                response.raise_for_status()
+                with open(dest_path, 'wb') as f:
+                    # Используем большой буфер для записи
+                    for chunk in response.iter_content(chunk_size=1024*1024): # 1MB chunk
+                        if chunk:
+                            f.write(chunk)
+            
+            if os.path.exists(dest_path):
+                print(f"✅ [ArbiFlow]: Файл успешно сохранен через requests ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
+                return True
         except Exception as e:
             print(f"⚠️ [ArbiFlow]: Ошибка при скачивании через requests: {e}", flush=True)
             return False
@@ -352,6 +440,7 @@ def download_via_ytdlp(video_url, dest_path):
     """
     import subprocess
     import os
+    import sys
     
     print(f"📡 [ArbiFlow]: Пробую yt-dlp с прокси...", flush=True)
     
@@ -366,11 +455,16 @@ def download_via_ytdlp(video_url, dest_path):
              print(f"⚠️ [ArbiFlow]: cookies.txt не найден, пробуем без куки.", flush=True)
              cookies_path = None
 
+    # Используем sys.executable -m yt_dlp для надежности
+    # Добавляем --no-check-certificate и другие флаги для стабильности
     cmd = [
-        "yt-dlp",
+        sys.executable, "-m", "yt_dlp",
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--proxy", proxy_url,
+        "--no-check-certificate",
+        "--prefer-free-formats",
+        "--no-playlist",
         "-o", dest_path,
         video_url
     ]
@@ -379,12 +473,14 @@ def download_via_ytdlp(video_url, dest_path):
         cmd.extend(["--cookies", cookies_path])
         
     try:
+        print(f"🚀 [ArbiFlow]: Запуск yt-dlp через {sys.executable}...", flush=True)
         process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode == 0:
+        if process.returncode == 0 and os.path.exists(dest_path):
             print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
             return True
         else:
-            print(f"❌ [ArbiFlow]: yt-dlp ошибка: {process.stderr}", flush=True)
+            stderr = process.stderr if process.stderr else "No error output"
+            print(f"❌ [ArbiFlow]: yt-dlp ошибка (code {process.returncode}): {stderr[:500]}", flush=True)
             return False
     except Exception as e:
         print(f"🔥 [ArbiFlow]: yt-dlp критическая ошибка: {e}", flush=True)
@@ -487,8 +583,12 @@ def download_via_rapidapi(video_url, dest_path, method="aria2c"):
             if v_success and os.path.exists(video_raw_path):
                 import shutil
                 shutil.move(video_raw_path, dest_path)
-                if os.path.exists(audio_raw_path): os.remove(audio_raw_path)
+                if os.path.exists(audio_raw_path) and os.path.exists(audio_raw_path): 
+                    try: os.remove(audio_raw_path)
+                    except: pass
                 return True
+            
+            return False # Если ничего не скачалось
                 
         else:
             print(f"⚠️ [ArbiFlow]: Отдельного аудио нет, качаем только видео (надеемся, что звук встроен).", flush=True)

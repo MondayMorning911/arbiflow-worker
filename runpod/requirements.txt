@@ -10,3 +10,4 @@ edge-tts
 yt-dlp
 google-genai
 mediapipe
+aiohttp
