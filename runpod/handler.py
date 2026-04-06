@@ -296,6 +296,9 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
     import subprocess
     import os
     
+    # Гарантируем наличие папки
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    
     if method == "aria2c":
         # Создаем временный файл со ссылкой (решает проблему длины)
         url_file = dest_path + ".url.txt"
@@ -342,31 +345,6 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
             return False
             
     return False
-
-def download_via_socialkit(video_url, dest_path, method="aria2c"):
-    """
-    Исправленный SocialKit (теперь GET запрос).
-    """
-    print(f"📡 [ArbiFlow]: Пробую SocialKit (GET)...", flush=True)
-    access_key = "1pnc5NYxqOCYpt" # Твой ключ
-    api_url = "https://api.socialkit.dev/youtube/download"
-    
-    try:
-        # ВАЖНО: Используем params=, а не json=
-        response = requests.get(api_url, params={"access_key": access_key, "url": video_url, "quality": "1080p"}, timeout=40)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get("success"):
-            direct_link = data["data"]["downloadUrl"]
-            print(f"✅ [ArbiFlow]: Ссылка получена! Размер файла: {data['data'].get('fileSizeMB')} MB")
-            return download_file_fast(direct_link, dest_path, method=method)
-        else:
-            print(f"❌ [ArbiFlow]: SocialKit API вернул ошибку: {data.get('message')}")
-            return False
-    except Exception as e:
-        print(f"🔥 [ArbiFlow]: SocialKit failed: {e}", flush=True)
-        return False
 
 def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     """
@@ -476,7 +454,7 @@ def download_via_rapidapi(video_url, dest_path, method="aria2c"):
         print(f"🔥 [ArbiFlow]: Ошибка продакшен-загрузки: {e}", flush=True)
         return False
 
-def handler(job):
+async def handler(job):
     job_id = job.get("id")
     job_input = job.get("input", {})
     task = job_input.get("task")
@@ -552,22 +530,15 @@ def handler(job):
                 print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
                 success = download_via_rapidapi(video_url, input_video, method="aria2c")
                 
-                # 2. SocialKit + aria2c
+                # 2. Telegram Bots
                 if not success:
-                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to SocialKit API...", flush=True)
-                    success = download_via_socialkit(video_url, input_video, method="aria2c")
-                    
-                # 3. Telegram Bots
-                if not success:
-                    print(f"3️⃣ [ArbiFlow Worker]: SocialKit failed. Falling back to Telegram Bots...", flush=True)
+                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to Telegram Bots...", flush=True)
                     try:
-                        import asyncio
                         # Need to import here to avoid circular imports or missing modules at top level if not installed
                         from telegram_downloader.worker import download_via_telegram
                         
-                        # Получаем текущий цикл
-                        loop = asyncio.get_event_loop()
-                        success = loop.run_until_complete(download_via_telegram(video_url, input_video))
+                        # ПРАВИЛЬНЫЙ ВЫЗОВ: просто await, так как handler теперь асинхронный
+                        success = await download_via_telegram(video_url, input_video)
                         
                         if success:
                             print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
@@ -577,13 +548,13 @@ def handler(job):
                         print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
                         success = False
 
-                # 4. RapidAPI + requests
+                # 3. RapidAPI + requests
                 if not success:
-                    print(f"4️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
+                    print(f"3️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
                     success = download_via_rapidapi(video_url, input_video, method="requests")
 
                 if not success:
-                    raise Exception("Все методы скачивания (RapidAPI, SocialKit, Telegram, requests) завершились с ошибкой.")
+                    raise Exception("Все методы скачивания (RapidAPI, Telegram, requests) завершились с ошибкой.")
                 else:
                     if success and not os.path.exists(input_video):
                         # Just in case
@@ -1010,7 +981,7 @@ def handler(job):
             voice_text = job_input.get("voice_text")
             output_audio = output_video.replace('.mp4', '.mp3')
             cleanup_list.append(output_audio)
-            asyncio.run(edge_tts.Communicate(voice_text, "ru-RU-SvetlanaNeural").save(output_audio))
+            await edge_tts.Communicate(voice_text, "ru-RU-SvetlanaNeural").save(output_audio)
             output_video = output_audio
                 
         elif task == "ai_translate":
