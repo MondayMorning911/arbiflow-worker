@@ -323,7 +323,8 @@ def download_file_multithreaded_python(url, dest, threads=8):
                 'Range': f'bytes={start}-{end}',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
-            with requests.get(url, headers=headers, stream=True, timeout=60) as r:
+            proxies = {"http": PROXY_URL, "https": PROXY_URL}
+            with requests.get(url, headers=headers, stream=True, timeout=60, proxies=proxies) as r:
                 r.raise_for_status()
                 with open(dest, 'r+b') as f:
                     f.seek(start)
@@ -364,11 +365,14 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
     
     # Пытаемся использовать axel (часто быстрее и надежнее aria2c в докере)
     if method == "aria2c":
-        print(f"🚀 [ArbiFlow]: Запуск axel (многопоточно)...", flush=True)
+        print(f"🚀 [ArbiFlow]: Запуск axel (многопоточно) через прокси...", flush=True)
         try:
             # axel -n 16 -a -o dest_path direct_link
+            # Для axel прокси задается через переменную окружения
+            env = os.environ.copy()
+            env["all_proxy"] = PROXY_URL
             cmd = ["axel", "-n", "16", "-a", "-o", dest_path, direct_link]
-            process = subprocess.run(cmd, capture_output=True)
+            process = subprocess.run(cmd, capture_output=True, env=env)
             if process.returncode == 0 and os.path.exists(dest_path):
                 print(f"✅ [ArbiFlow]: Файл успешно сохранен через axel ({round(os.path.getsize(dest_path)/1024/1024, 2)} MB)", flush=True)
                 return True
@@ -383,11 +387,12 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
             f.write(direct_link)
             
         try:
-            print(f"🚀 [ArbiFlow]: Запуск aria2c...", flush=True)
+            print(f"🚀 [ArbiFlow]: Запуск aria2c через прокси...", flush=True)
             cmd = [
                 "aria2c", 
                 "-i", url_file,
                 "-x", "16", "-s", "16", "-j", "16", "-k", "1M",
+                "--all-proxy", PROXY_URL,
                 "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "--check-certificate=false",
                 "--file-allocation=none",
@@ -412,11 +417,13 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
                 return True
             
     elif method == "requests":
-        print(f"🚀 [ArbiFlow]: Запуск ускоренного requests (1MB buffer)...", flush=True)
+        print(f"🚀 [ArbiFlow]: Запуск ускоренного requests (1MB buffer) через прокси...", flush=True)
         try:
             import requests
+            proxies = {"http": PROXY_URL, "https": PROXY_URL}
             # Увеличиваем таймаут и используем сессию для скорости
             with requests.Session() as s:
+                s.proxies.update(proxies)
                 response = s.get(direct_link, stream=True, timeout=300)
                 response.raise_for_status()
                 with open(dest_path, 'wb') as f:
@@ -434,6 +441,53 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
             
     return False
 
+# --- ГЛОБАЛЬНЫЕ НАСТРОЙКИ ---
+PROXY_URL = "socks5://arbiproxy:arbiproxy@83.147.18.62:1080"
+COOKIES_PATH = "/cookies.txt"
+if not os.path.exists(COOKIES_PATH):
+    COOKIES_PATH = "cookies.txt"
+    if not os.path.exists(COOKIES_PATH):
+        COOKIES_PATH = None
+
+def download_via_vps_cobalt(video_url, dest_path):
+    """
+    Запрос ссылки через собственный VPS Cobalt (Port 9005).
+    """
+    import requests
+    import os
+    
+    print(f"📡 [ArbiFlow]: Запрос ссылки через твой VPS Cobalt (Port 9005)...", flush=True)
+    cobalt_api = "http://83.147.18.62:9005/api/json"
+    
+    # Гарантируем папку
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    
+    payload = {
+        "url": video_url,
+        "videoQuality": "1080",
+        "audioFormat": "mp3", # Cobalt сам склеит видео и аудио
+        "filenameStyle": "basic"
+    }
+    
+    try:
+        # Используем прокси для запроса к Cobalt если нужно, но Cobalt на том же сервере что и прокси? 
+        # Обычно к локальному API прокси не нужен.
+        response = requests.post(cobalt_api, json=payload, headers={"Accept": "application/json"}, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data.get("url"):
+            print(f"✅ [ArbiFlow]: Cobalt выдал прямую ссылку. Начинаю скачивание...", flush=True)
+            # Качаем через aria2c, используя твой VPS-прокси
+            return download_file_fast(data["url"], dest_path, method="aria2c")
+        else:
+            print(f"⚠️ [ArbiFlow]: Cobalt не вернул URL. Ответ: {data}", flush=True)
+    except Exception as e:
+        print(f"⚠️ [ArbiFlow]: Cobalt VPS failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+    return False
+
 def download_via_ytdlp(video_url, dest_path):
     """
     Скачивание через yt-dlp с использованием прокси и куки.
@@ -441,62 +495,63 @@ def download_via_ytdlp(video_url, dest_path):
     import subprocess
     import os
     import sys
+    import traceback
     
-    print(f"📡 [ArbiFlow]: Пробую yt-dlp с прокси...", flush=True)
+    # 1. ГАРАНТИРУЕМ ПАПКУ (решает проблему с отсутствующей директорией)
+    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     
-    proxy_url = "socks5://arbiproxy:arbiproxy@83.147.18.62:1080"
-    # Куки в корне проекта
-    cookies_path = "/cookies.txt"
+    print(f"📡 [ArbiFlow]: Запуск yt-dlp (Module) через VPS Proxy...", flush=True)
     
-    if not os.path.exists(cookies_path):
-        # Попробуем найти в текущей директории если в корне нет
-        cookies_path = "cookies.txt"
-        if not os.path.exists(cookies_path):
-             print(f"⚠️ [ArbiFlow]: cookies.txt не найден, пробуем без куки.", flush=True)
-             cookies_path = None
-
-    # Попробуем сначала через python3 -m yt_dlp, затем через yt-dlp напрямую
-    # Добавляем --no-check-certificate и другие флаги для стабильности
-    # Добавляем --audio-multistreams и --extractor-args для получения оригинального языка (например, русского)
+    # Используем python3 -m yt_dlp (это решит проблему с No such file)
     base_cmd = [
-        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
-        "--proxy", proxy_url,
+        "--proxy", PROXY_URL,
         "--no-check-certificate",
         "--prefer-free-formats",
         "--no-playlist",
         "--audio-multistreams",
         "--extractor-args", "youtube:player_client=web,android;lang=ru",
-        "--audio-langs", "ru,en", # Приоритет русскому, затем английскому
+        "--audio-langs", "ru,orig", # Приоритет русскому/оригинальному
         "-o", dest_path,
         video_url
     ]
     
-    if cookies_path:
-        base_cmd.extend(["--cookies", cookies_path])
-        
-    try:
-        # Попытка 1: python3 -m yt_dlp
-        print(f"🚀 [ArbiFlow]: Запуск yt-dlp через python3 -m yt_dlp...", flush=True)
-        cmd1 = ["python3", "-m", "yt_dlp"] + base_cmd
-        process = subprocess.run(cmd1, capture_output=True, text=True)
-        
-        if process.returncode != 0:
-            # Попытка 2: yt-dlp напрямую
-            print(f"🔄 [ArbiFlow]: python3 -m yt_dlp не сработал, пробуем yt-dlp напрямую...", flush=True)
-            cmd2 = ["yt-dlp"] + base_cmd
-            process = subprocess.run(cmd2, capture_output=True, text=True)
+    if COOKIES_PATH and os.path.exists(COOKIES_PATH):
+        base_cmd.extend(["--cookies", COOKIES_PATH])
+        print(f"🍪 [ArbiFlow]: Куки подключены ({COOKIES_PATH}).", flush=True)
 
+    # Список команд для попыток запуска
+    python_execs = ["python3", "python", sys.executable]
+    
+    for py in python_execs:
+        try:
+            print(f"🚀 [ArbiFlow]: Попытка запуска через {py} -m yt_dlp...", flush=True)
+            cmd = [py, "-m", "yt_dlp"] + base_cmd
+            process = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if process.returncode == 0 and os.path.exists(dest_path):
+                print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
+                return True
+            else:
+                stderr = process.stderr if process.stderr else "No error output"
+                print(f"⚠️ [ArbiFlow]: {py} -m yt_dlp не сработал (code {process.returncode}): {stderr[:300]}", flush=True)
+        except Exception as e:
+            print(f"⚠️ [ArbiFlow]: Ошибка при попытке запуска через {py}: {e}", flush=True)
+
+    # Последняя попытка: yt-dlp напрямую
+    try:
+        print(f"🚀 [ArbiFlow]: Попытка запуска yt-dlp напрямую...", flush=True)
+        cmd = ["yt-dlp"] + base_cmd
+        process = subprocess.run(cmd, capture_output=True, text=True)
         if process.returncode == 0 and os.path.exists(dest_path):
-            print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
+            print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео напрямую!", flush=True)
             return True
-        else:
-            stderr = process.stderr if process.stderr else "No error output"
-            print(f"❌ [ArbiFlow]: yt-dlp ошибка (code {process.returncode}): {stderr[:500]}", flush=True)
-            return False
     except Exception as e:
-        print(f"🔥 [ArbiFlow]: yt-dlp критическая ошибка: {e}", flush=True)
-        return False
+        print(f"⚠️ [ArbiFlow]: Прямой запуск yt-dlp не удался: {e}", flush=True)
+
+    print(f"❌ [ArbiFlow]: Все способы запуска yt-dlp провалены.", flush=True)
+    return False
 
 def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     """
@@ -521,8 +576,9 @@ def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     try:
         # Запрос метаданных видео с ретраями при 429
         import time
+        proxies = {"http": PROXY_URL, "https": PROXY_URL}
         for attempt in range(3):
-            response = requests.get(rapid_url, headers=headers, params=params, timeout=20)
+            response = requests.get(rapid_url, headers=headers, params=params, timeout=20, proxies=proxies)
             if response.status_code == 429:
                 print(f"⚠️ [ArbiFlow]: RapidAPI 429 (Too Many Requests). Ждем 5 сек (попытка {attempt+1}/3)...", flush=True)
                 time.sleep(5)
@@ -705,52 +761,40 @@ async def handler(job):
             if is_url:
                 print(f"📥 [ArbiFlow Worker]: Starting download process...", flush=True)
                 
-                is_youtube = "youtube.com" in video_url or "youtu.be" in video_url
+                # Попытка 1: Твой новый Cobalt VPS (Бесплатно, без лимитов)
+                success = download_via_vps_cobalt(video_url, input_video)
                 
-                if is_youtube:
-                    print(f"📺 [ArbiFlow Worker]: YouTube detected. Prioritizing yt-dlp for original language...", flush=True)
-                    # 1. yt-dlp + Proxy + Cookies (Best for YouTube language selection)
-                    success = download_via_ytdlp(video_url, input_video)
-                    
-                    # 2. RapidAPI + aria2c (Fallback)
-                    if not success:
-                        print(f"2️⃣ [ArbiFlow Worker]: yt-dlp failed. Falling back to RapidAPI + aria2c...", flush=True)
-                        success = download_via_rapidapi(video_url, input_video, method="aria2c")
-                else:
-                    # 1. RapidAPI + aria2c (Default for other platforms)
-                    print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
-                    success = download_via_rapidapi(video_url, input_video, method="aria2c")
-                    
-                    # 2. yt-dlp + Proxy + Cookies (Fallback)
-                    if not success:
-                        print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to yt-dlp + Proxy...", flush=True)
-                        success = download_via_ytdlp(video_url, input_video)
-
-                # 3. Telegram Bots
                 if not success:
-                    print(f"3️⃣ [ArbiFlow Worker]: yt-dlp failed. Falling back to Telegram Bots...", flush=True)
+                    print(f"🔄 [ArbiFlow]: Cobalt VPS не сработал. Пробую yt-dlp (Module)...", flush=True)
+                    # Попытка 2: yt-dlp через прокси (Best for YouTube language selection)
+                    success = download_via_ytdlp(video_url, input_video)
+                
+                if not success:
+                    print(f"🔄 [ArbiFlow]: yt-dlp не сработал. Пробую RapidAPI + aria2c...", flush=True)
+                    # Попытка 3: RapidAPI + aria2c (Fallback)
+                    success = download_via_rapidapi(video_url, input_video, method="aria2c")
+
+                # 4. Telegram Bots
+                if not success:
+                    print(f"🔄 [ArbiFlow]: RapidAPI failed. Falling back to Telegram Bots...", flush=True)
                     try:
-                        # Need to import here to avoid circular imports or missing modules at top level if not installed
                         from telegram_downloader.worker import download_via_telegram
-                        
-                        # ПРАВИЛЬНЫЙ ВЫЗОВ: просто await, так как handler теперь асинхронный
                         success = await download_via_telegram(video_url, input_video)
-                        
                         if success:
                             print(f"✅ [ArbiFlow Worker]: Video downloaded successfully via Telegram Bots.", flush=True)
-                        else:
-                            print(f"❌ [ArbiFlow Worker]: Telegram Bots failed to download video.", flush=True)
                     except Exception as e:
                         print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
+                        import traceback
+                        traceback.print_exc()
                         success = False
 
-                # 4. RapidAPI + requests
+                # 5. RapidAPI + requests
                 if not success:
-                    print(f"4️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
+                    print(f"🔄 [ArbiFlow]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
                     success = download_via_rapidapi(video_url, input_video, method="requests")
-
+                
                 if not success:
-                    raise Exception("Все методы скачивания (RapidAPI, yt-dlp, Telegram, requests) завершились с ошибкой.")
+                    raise Exception("Все методы скачивания (Cobalt, yt-dlp, RapidAPI, Telegram, requests) завершились с ошибкой.")
                 else:
                     if success and not os.path.exists(input_video):
                         # Just in case

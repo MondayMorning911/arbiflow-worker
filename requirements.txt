@@ -11,3 +11,5 @@ google-genai
 mediapipe
 telethon
 tgcrypto
+yt-dlp
+pysocks

@@ -6,14 +6,23 @@ from telethon import TelegramClient
 from dotenv import load_dotenv
 from .bot_pool import BotPool
 
+from telethon.sessions import StringSession
+
 load_dotenv()
 
 API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
+STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION", "")
 
 # Use a separate session file for Telethon to avoid conflicting with Pyrogram's userbot.session
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SESSION_NAME = os.path.join(BASE_DIR, "sessions", "telethon_downloader")
+# Пытаемся найти корень проекта более надежно
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(CURRENT_DIR)
+SESSION_DIR = os.path.join(BASE_DIR, "sessions")
+SESSION_NAME = os.path.join(SESSION_DIR, "telethon_downloader")
+
+# Гарантируем наличие папки сессий
+os.makedirs(SESSION_DIR, exist_ok=True)
 
 DOWNLOADER_BOTS = [
     "@TTPapaBot",
@@ -34,7 +43,21 @@ async def download_via_telegram(url: str, dest_path: str) -> str:
     Returns path to downloaded video file
     Raises exception if all bots failed
     """
-    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    if STRING_SESSION:
+        print(f"🔑 [Telegram Downloader]: Using TELEGRAM_STRING_SESSION", flush=True)
+        client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+    else:
+        session_file = f"{SESSION_NAME}.session"
+        print(f"🔍 [Telegram Downloader]: Looking for session at: {session_file}", flush=True)
+        if os.path.exists(session_file):
+            print(f"✅ [Telegram Downloader]: Session file found! Size: {os.path.getsize(session_file)} bytes", flush=True)
+        else:
+            print(f"❌ [Telegram Downloader]: Session file NOT FOUND at {session_file}", flush=True)
+            # Выведем содержимое папки для отладки
+            try:
+                print(f"📂 [Telegram Downloader]: Contents of {SESSION_DIR}: {os.listdir(SESSION_DIR)}", flush=True)
+            except: pass
+        client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.connect()
     
     if not await client.is_user_authorized():
