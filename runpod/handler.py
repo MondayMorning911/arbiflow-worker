@@ -455,11 +455,10 @@ def download_via_ytdlp(video_url, dest_path):
              print(f"⚠️ [ArbiFlow]: cookies.txt не найден, пробуем без куки.", flush=True)
              cookies_path = None
 
-    # Используем sys.executable -m yt_dlp для надежности
+    # Попробуем сначала через python3 -m yt_dlp, затем через yt-dlp напрямую
     # Добавляем --no-check-certificate и другие флаги для стабильности
     # Добавляем --audio-multistreams и --extractor-args для получения оригинального языка (например, русского)
-    cmd = [
-        sys.executable, "-m", "yt_dlp",
+    base_cmd = [
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--proxy", proxy_url,
@@ -474,11 +473,20 @@ def download_via_ytdlp(video_url, dest_path):
     ]
     
     if cookies_path:
-        cmd.extend(["--cookies", cookies_path])
+        base_cmd.extend(["--cookies", cookies_path])
         
     try:
-        print(f"🚀 [ArbiFlow]: Запуск yt-dlp через {sys.executable}...", flush=True)
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        # Попытка 1: python3 -m yt_dlp
+        print(f"🚀 [ArbiFlow]: Запуск yt-dlp через python3 -m yt_dlp...", flush=True)
+        cmd1 = ["python3", "-m", "yt_dlp"] + base_cmd
+        process = subprocess.run(cmd1, capture_output=True, text=True)
+        
+        if process.returncode != 0:
+            # Попытка 2: yt-dlp напрямую
+            print(f"🔄 [ArbiFlow]: python3 -m yt_dlp не сработал, пробуем yt-dlp напрямую...", flush=True)
+            cmd2 = ["yt-dlp"] + base_cmd
+            process = subprocess.run(cmd2, capture_output=True, text=True)
+
         if process.returncode == 0 and os.path.exists(dest_path):
             print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
             return True
@@ -511,9 +519,20 @@ def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     params = {"videoId": video_id}
 
     try:
-        # Запрос метаданных видео
-        response = requests.get(rapid_url, headers=headers, params=params, timeout=20)
-        response.raise_for_status()
+        # Запрос метаданных видео с ретраями при 429
+        import time
+        for attempt in range(3):
+            response = requests.get(rapid_url, headers=headers, params=params, timeout=20)
+            if response.status_code == 429:
+                print(f"⚠️ [ArbiFlow]: RapidAPI 429 (Too Many Requests). Ждем 5 сек (попытка {attempt+1}/3)...", flush=True)
+                time.sleep(5)
+                continue
+            response.raise_for_status()
+            break
+        else:
+            print(f"❌ [ArbiFlow]: RapidAPI не ответил после 3 попыток (429).", flush=True)
+            return False
+            
         data = response.json()
 
         # 1. Ищем видео 1080p
