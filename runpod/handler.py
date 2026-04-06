@@ -346,6 +346,50 @@ def download_file_fast(direct_link, dest_path, method="aria2c"):
             
     return False
 
+def download_via_ytdlp(video_url, dest_path):
+    """
+    Скачивание через yt-dlp с использованием прокси и куки.
+    """
+    import subprocess
+    import os
+    
+    print(f"📡 [ArbiFlow]: Пробую yt-dlp с прокси...", flush=True)
+    
+    proxy_url = "socks5://arbiproxy:arbiproxy@83.147.18.62:1080"
+    # Куки в корне проекта
+    cookies_path = "/cookies.txt"
+    
+    if not os.path.exists(cookies_path):
+        # Попробуем найти в текущей директории если в корне нет
+        cookies_path = "cookies.txt"
+        if not os.path.exists(cookies_path):
+             print(f"⚠️ [ArbiFlow]: cookies.txt не найден, пробуем без куки.", flush=True)
+             cookies_path = None
+
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "--proxy", proxy_url,
+        "-o", dest_path,
+        video_url
+    ]
+    
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
+        
+    try:
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        if process.returncode == 0:
+            print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
+            return True
+        else:
+            print(f"❌ [ArbiFlow]: yt-dlp ошибка: {process.stderr}", flush=True)
+            return False
+    except Exception as e:
+        print(f"🔥 [ArbiFlow]: yt-dlp критическая ошибка: {e}", flush=True)
+        return False
+
 def download_via_rapidapi(video_url, dest_path, method="aria2c"):
     """
     Стабильное скачивание видео в 1080p через RapidAPI для продакшена ArbiFlow.
@@ -530,9 +574,14 @@ async def handler(job):
                 print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
                 success = download_via_rapidapi(video_url, input_video, method="aria2c")
                 
-                # 2. Telegram Bots
+                # 2. yt-dlp + Proxy + Cookies
                 if not success:
-                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to Telegram Bots...", flush=True)
+                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to yt-dlp + Proxy...", flush=True)
+                    success = download_via_ytdlp(video_url, input_video)
+
+                # 3. Telegram Bots
+                if not success:
+                    print(f"3️⃣ [ArbiFlow Worker]: yt-dlp failed. Falling back to Telegram Bots...", flush=True)
                     try:
                         # Need to import here to avoid circular imports or missing modules at top level if not installed
                         from telegram_downloader.worker import download_via_telegram
@@ -548,13 +597,13 @@ async def handler(job):
                         print(f"❌ [ArbiFlow Worker]: Telegram Bots failed: {e}", flush=True)
                         success = False
 
-                # 3. RapidAPI + requests
+                # 4. RapidAPI + requests
                 if not success:
-                    print(f"3️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
+                    print(f"4️⃣ [ArbiFlow Worker]: Telegram Bots failed. Falling back to RapidAPI + requests...", flush=True)
                     success = download_via_rapidapi(video_url, input_video, method="requests")
 
                 if not success:
-                    raise Exception("Все методы скачивания (RapidAPI, Telegram, requests) завершились с ошибкой.")
+                    raise Exception("Все методы скачивания (RapidAPI, yt-dlp, Telegram, requests) завершились с ошибкой.")
                 else:
                     if success and not os.path.exists(input_video):
                         # Just in case
