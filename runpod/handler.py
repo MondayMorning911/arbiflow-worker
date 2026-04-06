@@ -450,37 +450,33 @@ if not os.path.exists(COOKIES_PATH):
         COOKIES_PATH = None
 
 def download_via_vps_cobalt(video_url, dest_path):
-    """
-    Запрос ссылки через собственный VPS Cobalt (Port 9005).
-    """
-    import requests
-    import os
-    
     print(f"📡 [ArbiFlow]: Запрос ссылки через твой VPS Cobalt (Port 9005)...", flush=True)
-    # Используем твой IP и рабочий порт
-    cobalt_api = "http://83.147.18.62:9005/api/json"
-    
-    # Гарантируем папку
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+    # Твой проверенный IP и порт
+    cobalt_api = "http://83.147.18.62:9005/" 
     
     payload = {
         "url": video_url,
         "videoQuality": "1080",
-        "audioFormat": "mp3", # Cobalt сам склеит в mp4
         "filenameStyle": "basic"
     }
     
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+    
     try:
-        response = requests.post(cobalt_api, json=payload, headers={"Accept": "application/json"}, timeout=30)
+        # Шлем POST на корень, как в твоем успешном curl-тесте
+        response = requests.post(cobalt_api, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         data = response.json()
         
-        if data.get("url"):
-            print(f"✅ [ArbiFlow]: Ссылка от Cobalt получена. Запуск aria2c...", flush=True)
-            # Качаем через aria2c с твоим SOCKS5 прокси
-            return download_file_fast(data["url"], dest_path, method="aria2c")
-        else:
-            print(f"⚠️ [ArbiFlow]: Cobalt не вернул URL. Ответ: {data}", flush=True)
+        direct_link = data.get("url")
+        if direct_link:
+            print(f"✅ [ArbiFlow]: Ссылка получена! Начинаю скачивание...", flush=True)
+            # Используем твой метод с aria2c и SOCKS5 прокси
+            return download_file_fast(direct_link, dest_path, method="aria2c")
+            
     except Exception as e:
         print(f"⚠️ Cobalt VPS failed: {e}", flush=True)
     return False
@@ -879,37 +875,69 @@ async def handler(job):
             
             def analyze_block(block):
                 prompt = f"""
-                Ты — строгий режиссер монтажа вирусных Shorts/Reels. Твоя задача — хирургически точно вырезать самые "сочные" моменты из транскрипта.
+Ты — профессиональный режиссер монтажа вирусных Shorts / Reels.
+Твоя задача — найти максимум сильных кандидатов для клипов.
 
-                КРИТЕРИИ ИДЕАЛЬНОЙ СЦЕНЫ (ЖЕСТКИЕ ПРАВИЛА):
-                1. ХИРУРГИЧЕСКАЯ ТОЧНОСТЬ ТАЙМКОДОВ: Сцена должна начинаться РОВНО с того слова, где начинается интересная тема (Хук). Никакого "смоллтока", приветствий или мычания до этого! Заканчиваться сцена должна РОВНО на логичном выводе или панчлайне.
-                2. ЦЕЛЬНАЯ ИСТОРИЯ: Внутри отрезка должна быть полностью раскрыта одна мысль. Если тема только началась и блок закончился — НЕ БЕРИ эту сцену.
-                3. АНТИ-РЕКЛАМА И АНТИ-ПУСТОТА: Если между репликами (таймкодами) есть разрыв более 5-7 секунд — это реклама или музыкальная пауза. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО включать такие разрывы внутрь сцены!
-                4. КРАТКОСТЬ: Описание (scene_topic) и причина (viral_reason) должны быть ОЧЕНЬ короткими — максимум 1 предложение (до 10 слов).
-                5. Длительность: строго от 20 до 90 секунд.
+Это этап генерации кандидатов (MAX RECALL).
+Нужно найти 15–25 потенциальных сцен уровня >=7.
 
-                Найди от 1 до 5 лучших самостоятельных сцен. Если в блоке только скучный треп, реклама или обрывки — смело возвращай пустой массив. Лучше 0 сцен, чем плохая сцена.
-                
-                ТРАНСКРИПТ:
-                {block['text']}
-                
-                ВЫВОД СТРОГО В JSON:
-                {{
-                  "scenes": [
-                    {{
-                      "start_time": 12.5,
-                      "end_time": 55.0,
-                      "viral_score": 9,
-                      "emotion_type": "юмор/дилемма/шок/инсайт",
-                      "viral_reason": "Коротко: почему это зацепит (до 10 слов)",
-                      "hook_text": "Точная первая фраза, с которой начинается клип",
-                      "cover_title": "Кликабельный заголовок (до 5 слов)",
-                      "scene_topic": "Коротко: о чем клип (до 10 слов)"
-                    }}
-                  ]
-                }}
-                Если подходящих сцен нет, верни {{"scenes": []}}.
-                """
+==================================================
+АЛГОРИТМ:
+
+1. Прочитай транскрипт полностью.
+2. Игнорируй:
+   - трейлерные нарезки
+   - анонсы “в этом выпуске”
+   - рекламные вставки
+   - музыкальные вступления
+3. Найди фразы-хуки:
+   - конфликт
+   - провокация
+   - неожиданный факт
+   - сильный инсайт
+   - эмоциональный всплеск
+   - резкое утверждение
+4. Для каждого кандидата проверь:
+   ✓ Начинается с речи (не музыка)
+   ✓ Нет пауз >3 секунд
+   ✓ Длительность 20–90 секунд
+   ✓ Мысль завершена
+   ✓ Нет резких перескоков тем
+   ✓ Можно понять без контекста
+
+Если пункт не выполнен — не включай.
+
+==================================================
+VIRAL_SCORE (1–10):
+
+10 — сильный шок / конфликт
+8–9 — мощный инсайт / эмоция
+7 — хороший удерживающий момент
+<7 — не возвращать
+
+==================================================
+Верни от 15 до 25 сцен (если есть).
+
+==================================================
+ТРАНСКРИПТ:
+{block['text']}
+
+==================================================
+ВЫВОД СТРОГО В JSON:
+
+{{
+  "candidates": [
+    {{
+      "start_time": 12.5,
+      "end_time": 55.0,
+      "viral_score": 8,
+      "emotion_type": "конфликт",
+      "hook_text": "Первая фраза сцены",
+      "scene_topic": "Коротко о чем сцена"
+    }}
+  ]
+}}
+"""
                 headers = {
                     "Authorization": f"Bearer {deepseek_api_key}",
                     "Content-Type": "application/json"
@@ -946,7 +974,7 @@ async def handler(job):
                     
                     # Пытаемся распарсить как чистый JSON
                     try:
-                        return json.loads(content).get("scenes", [])
+                        return json.loads(content).get("candidates", [])
                     except json.JSONDecodeError:
                         print(f"⚠️ [ArbiFlow]: Не удалось распарсить JSON из текста блока {block['id']}: {content[:100]}...")
                         return []
@@ -961,52 +989,87 @@ async def handler(job):
                     if isinstance(res, list):
                         all_scenes.extend(res)
                         
-            # Filter valid scenes
-            valid_scenes = []
+            # Filter valid scenes and remove overlaps
+            all_candidates = []
             for s in all_scenes:
                 if 'start_time' in s and 'end_time' in s:
                     try:
                         s['start_time'] = float(s['start_time'])
                         s['end_time'] = float(s['end_time'])
                         if s['end_time'] - s['start_time'] >= 20:
-                            valid_scenes.append(s)
+                            all_candidates.append(s)
                     except: pass
+            
+            # 1. Сортируем по viral_score убыванию
+            all_candidates.sort(key=lambda x: x.get('viral_score', 0), reverse=True)
+            
+            # 2. Убираем пересечения (оставляем более высокий viral_score)
+            valid_scenes = []
+            for cand in all_candidates:
+                overlap = False
+                for selected in valid_scenes:
+                    # Проверка на пересечение интервалов
+                    if not (cand['end_time'] <= selected['start_time'] or cand['start_time'] >= selected['end_time']):
+                        overlap = True
+                        break
+                if not overlap:
+                    valid_scenes.append(cand)
                     
-            print(f"🎯 [ArbiFlow Worker]: Found {len(valid_scenes)} potential scenes. Running global selection...", flush=True)
+            print(f"🎯 [ArbiFlow Worker]: Found {len(valid_scenes)} non-overlapping candidates. Running global selection...", flush=True)
             
             if not valid_scenes:
                 raise Exception("No valid scenes found in the video.")
                 
-            valid_scenes.sort(key=lambda x: x.get('viral_score', 0), reverse=True)
-            top_scenes = valid_scenes[:50]
+            # PASS B: FINAL SELECTION
+            top_scenes = valid_scenes[:40] # Берем топ-40 для финального отбора
             
             global_prompt = f"""
-            Вот список лучших потенциальных вирусных сцен из видео:
-            {json.dumps(top_scenes, ensure_ascii=False, indent=2)}
-            
-            Твоя задача: выбрать от 5 до 10 САМЫХ ЛУЧШИХ сцен для публикации.
-            
-            ПРАВИЛА:
-            1. Сцены НЕ ДОЛЖНЫ пересекаться по времени (start_time и end_time).
-            2. Выбирай самые разнообразные по темам.
-            3. Отдавай приоритет высокому viral_score.
-            4. Обязательно выбери не менее 5 сцен, если это возможно без потери качества. Если видео длинное, старайся выбрать ближе к 10 сценам.
-            
-            ВЫВОД СТРОГО В JSON:
-            {{
-              "clips": [
-                {{
-                  "start_time": 12.5,
-                  "end_time": 55.0,
-                  "cover_title": "...",
-                  "scene_topic": "...",
-                  "viral_reason": "...",
-                  "emotion_type": "...",
-                  "viral_score": 8
-                }}
-              ]
-            }}
-            """
+Ты — главный редактор коротких видео.
+Твоя задача — из списка кандидатов выбрать ровно 10
+максимально сильных и разнообразных клипов.
+
+Это финальный этап (QUALITY MODE).
+
+==================================================
+ТРЕБОВАНИЯ:
+
+1. Ровно 10 сцен.
+2. Без пересечений по времени.
+3. Разные emotion_type (по возможности).
+4. Только сцены с полной драматургией:
+   хук → развитие → вывод.
+5. Сцены должны быть самостоятельными.
+6. Не выбирать несколько сцен на одну и ту же мысль.
+
+==================================================
+Приоритет при выборе:
+
+1. Более высокий viral_score
+2. Завершенность мысли
+3. Сильный хук в первые 2 секунды
+4. Разнообразие тем и эмоций
+
+==================================================
+КАНДИДАТЫ:
+{json.dumps(top_scenes, ensure_ascii=False, indent=2)}
+
+==================================================
+ВЫВОД СТРОГО В JSON:
+
+{{
+  "final_scenes": [
+    {{
+      "start_time": 12.5,
+      "end_time": 55.0,
+      "viral_score": 9,
+      "emotion_type": "шок",
+      "hook_text": "Первая фраза сцены",
+      "cover_title": "Кликабельный заголовок до 5 слов",
+      "viral_reason": "Почему это зайдет (до 10 слов)"
+    }}
+  ]
+}}
+"""
             
             headers = {
                 "Authorization": f"Bearer {deepseek_api_key}",
@@ -1028,7 +1091,7 @@ async def handler(job):
                 choices = data.get('choices', [])
                 if not choices:
                     print(f"⚠️ [ArbiFlow]: AI вернул пустой ответ (no choices) для глобального отбора")
-                    clips_data = top_scenes[:5]
+                    clips_data = valid_scenes[:10]
                 else:
                     content = choices[0].get('message', {}).get('content', '')
                     
@@ -1044,13 +1107,15 @@ async def handler(job):
                     
                     try:
                         final_data = json.loads(content)
-                        clips_data = final_data.get("clips", [])
+                        clips_data = final_data.get("final_scenes", [])
+                        if not clips_data:
+                            clips_data = valid_scenes[:10]
                     except json.JSONDecodeError:
                         print(f"⚠️ [ArbiFlow]: Не удалось распарсить JSON из глобального отбора: {content[:100]}...")
-                        clips_data = top_scenes[:5]
+                        clips_data = valid_scenes[:10]
             except Exception as e:
-                print(f"❌ [ArbiFlow Worker]: Global selection failed: {e}. Falling back to top 5 scenes.", flush=True)
-                clips_data = top_scenes[:5]
+                print(f"❌ [ArbiFlow Worker]: Global selection failed: {e}. Falling back to top 10 scenes.", flush=True)
+                clips_data = valid_scenes[:10]
                 
             # 4. Validation (Remove overlaps locally)
             clips_data.sort(key=lambda x: x['start_time'])
