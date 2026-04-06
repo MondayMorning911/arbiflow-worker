@@ -10,9 +10,10 @@ from telethon.sessions import StringSession
 
 load_dotenv()
 
-API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
-API_HASH = os.getenv("TELEGRAM_API_HASH", "")
-STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION", "")
+API_ID = int(os.getenv("TELEGRAM_API_ID", "32196791"))
+API_HASH = os.getenv("TELEGRAM_API_HASH", "66369284bdf0c127bd4a7f4b6f013aa9")
+# Hardcoded fallback for RunPod if env vars are not working
+STRING_SESSION = os.getenv("TELEGRAM_STRING_SESSION", "1ApWapzMBu8IWgBtEm2rlXxAa0p9ozFxiZrpKPSmyl9EWUHEriH5jnemhJNDdgRaeu60m7h7XH6zjR5sBbDxyJLOYyfiO_AfsCzIlIcgkgB9hEXpek38nSmwxL4DicojrGcXT4c1byUViu6FmlxjUblsfG4GH7bg6AfpzVDmgEgQtiedXsqz8Oja9YJkKASVm6wt2ZAyo9GCNAEkBXyGnWBQhbfYjXoytp90x_CClQN2QiyJ6CxtyVpGmEUpqVS6EVx7VNrWqKD1FFAeht9I2VyCgRUYd453SonFcz_VgfntHzB2drGnmzkccOnqUsSK4nnBNBk48CKcQb2hrUziGeGxjJHC0LNY=")
 
 # Use a separate session file for Telethon to avoid conflicting with Pyrogram's userbot.session
 # Пытаемся найти корень проекта более надежно

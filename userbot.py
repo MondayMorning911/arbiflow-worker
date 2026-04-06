@@ -41,8 +41,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 
 # 🔐 Настройки
-API_ID = int(os.getenv("TELEGRAM_API_ID", "0"))
-API_HASH = os.getenv("TELEGRAM_API_HASH")
+API_ID = int(os.getenv("TELEGRAM_API_ID", "32196791"))
+API_HASH = os.getenv("TELEGRAM_API_HASH", "66369284bdf0c127bd4a7f4b6f013aa9")
 MAIN_BOT_ID = int(os.getenv("MAIN_BOT_ID", "0"))
 USERBOT_ID = os.getenv("USERBOT_ID", "userbot")
 
