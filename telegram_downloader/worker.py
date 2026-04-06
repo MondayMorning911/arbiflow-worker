@@ -43,6 +43,10 @@ async def download_via_telegram(url: str, dest_path: str) -> str:
     Returns path to downloaded video file
     Raises exception if all bots failed
     """
+    if not STRING_SESSION:
+        print("⚠️ [Telegram Downloader]: TELEGRAM_STRING_SESSION is not set! Telegram will likely fail on RunPod.", flush=True)
+        print("💡 [Telegram Downloader]: Please generate a string session and add it to environment variables.", flush=True)
+
     if STRING_SESSION:
         print(f"🔑 [Telegram Downloader]: Using TELEGRAM_STRING_SESSION", flush=True)
         client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
@@ -58,6 +62,7 @@ async def download_via_telegram(url: str, dest_path: str) -> str:
                 print(f"📂 [Telegram Downloader]: Contents of {SESSION_DIR}: {os.listdir(SESSION_DIR)}", flush=True)
             except: pass
         client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    
     await client.connect()
     
     if not await client.is_user_authorized():

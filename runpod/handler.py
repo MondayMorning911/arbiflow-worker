@@ -457,6 +457,7 @@ def download_via_vps_cobalt(video_url, dest_path):
     import os
     
     print(f"📡 [ArbiFlow]: Запрос ссылки через твой VPS Cobalt (Port 9005)...", flush=True)
+    # Используем твой IP и рабочий порт
     cobalt_api = "http://83.147.18.62:9005/api/json"
     
     # Гарантируем папку
@@ -465,27 +466,23 @@ def download_via_vps_cobalt(video_url, dest_path):
     payload = {
         "url": video_url,
         "videoQuality": "1080",
-        "audioFormat": "mp3", # Cobalt сам склеит видео и аудио
+        "audioFormat": "mp3", # Cobalt сам склеит в mp4
         "filenameStyle": "basic"
     }
     
     try:
-        # Используем прокси для запроса к Cobalt если нужно, но Cobalt на том же сервере что и прокси? 
-        # Обычно к локальному API прокси не нужен.
         response = requests.post(cobalt_api, json=payload, headers={"Accept": "application/json"}, timeout=30)
         response.raise_for_status()
         data = response.json()
         
         if data.get("url"):
-            print(f"✅ [ArbiFlow]: Cobalt выдал прямую ссылку. Начинаю скачивание...", flush=True)
-            # Качаем через aria2c, используя твой VPS-прокси
+            print(f"✅ [ArbiFlow]: Ссылка от Cobalt получена. Запуск aria2c...", flush=True)
+            # Качаем через aria2c с твоим SOCKS5 прокси
             return download_file_fast(data["url"], dest_path, method="aria2c")
         else:
             print(f"⚠️ [ArbiFlow]: Cobalt не вернул URL. Ответ: {data}", flush=True)
     except Exception as e:
-        print(f"⚠️ [ArbiFlow]: Cobalt VPS failed: {e}", flush=True)
-        import traceback
-        traceback.print_exc()
+        print(f"⚠️ Cobalt VPS failed: {e}", flush=True)
     return False
 
 def download_via_ytdlp(video_url, dest_path):
@@ -494,61 +491,38 @@ def download_via_ytdlp(video_url, dest_path):
     """
     import subprocess
     import os
-    import sys
-    import traceback
     
-    # 1. ГАРАНТИРУЕМ ПАПКУ (решает проблему с отсутствующей директорией)
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    
-    print(f"📡 [ArbiFlow]: Запуск yt-dlp (Module) через VPS Proxy...", flush=True)
-    
-    # Используем python3 -m yt_dlp (это решит проблему с No such file)
-    base_cmd = [
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+    proxy_url = "socks5://arbiproxy:arbiproxy@83.147.18.62:1080"
+
+    # Убрали --audio-langs, добавили приоритет RU в параметр -f
+    cmd = [
+        "python3", "-m", "yt_dlp",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[language~='(?i)ru|orig']/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
-        "--proxy", PROXY_URL,
+        "--proxy", proxy_url,
         "--no-check-certificate",
-        "--prefer-free-formats",
-        "--no-playlist",
-        "--audio-multistreams",
-        "--extractor-args", "youtube:player_client=web,android;lang=ru",
-        "--audio-langs", "ru,orig", # Приоритет русскому/оригинальному
         "-o", dest_path,
         video_url
     ]
     
     if COOKIES_PATH and os.path.exists(COOKIES_PATH):
-        base_cmd.extend(["--cookies", COOKIES_PATH])
+        cmd.extend(["--cookies", COOKIES_PATH])
         print(f"🍪 [ArbiFlow]: Куки подключены ({COOKIES_PATH}).", flush=True)
 
-    # Список команд для попыток запуска
-    python_execs = ["python3", "python", sys.executable]
-    
-    for py in python_execs:
-        try:
-            print(f"🚀 [ArbiFlow]: Попытка запуска через {py} -m yt_dlp...", flush=True)
-            cmd = [py, "-m", "yt_dlp"] + base_cmd
-            process = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if process.returncode == 0 and os.path.exists(dest_path):
-                print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
-                return True
-            else:
-                stderr = process.stderr if process.stderr else "No error output"
-                print(f"⚠️ [ArbiFlow]: {py} -m yt_dlp не сработал (code {process.returncode}): {stderr[:300]}", flush=True)
-        except Exception as e:
-            print(f"⚠️ [ArbiFlow]: Ошибка при попытке запуска через {py}: {e}", flush=True)
-
-    # Последняя попытка: yt-dlp напрямую
     try:
-        print(f"🚀 [ArbiFlow]: Попытка запуска yt-dlp напрямую...", flush=True)
-        cmd = ["yt-dlp"] + base_cmd
+        print(f"📡 [ArbiFlow]: Запуск yt-dlp (Module) без лишних флагов...", flush=True)
         process = subprocess.run(cmd, capture_output=True, text=True)
         if process.returncode == 0 and os.path.exists(dest_path):
-            print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео напрямую!", flush=True)
+            print(f"✅ [ArbiFlow]: yt-dlp успешно скачал видео!", flush=True)
             return True
+        else:
+            stderr = process.stderr if process.stderr else "No error output"
+            print(f"❌ yt-dlp error: {stderr[:300]}", flush=True)
+            return False
     except Exception as e:
-        print(f"⚠️ [ArbiFlow]: Прямой запуск yt-dlp не удался: {e}", flush=True)
+        print(f"🔥 Critical yt-dlp error: {e}", flush=True)
+        return False
 
     print(f"❌ [ArbiFlow]: Все способы запуска yt-dlp провалены.", flush=True)
     return False
