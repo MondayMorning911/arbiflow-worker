@@ -457,6 +457,7 @@ def download_via_ytdlp(video_url, dest_path):
 
     # Используем sys.executable -m yt_dlp для надежности
     # Добавляем --no-check-certificate и другие флаги для стабильности
+    # Добавляем --audio-multistreams и --extractor-args для получения оригинального языка (например, русского)
     cmd = [
         sys.executable, "-m", "yt_dlp",
         "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -465,6 +466,9 @@ def download_via_ytdlp(video_url, dest_path):
         "--no-check-certificate",
         "--prefer-free-formats",
         "--no-playlist",
+        "--audio-multistreams",
+        "--extractor-args", "youtube:player_client=web,android;lang=ru",
+        "--audio-langs", "ru,en", # Приоритет русскому, затем английскому
         "-o", dest_path,
         video_url
     ]
@@ -533,8 +537,20 @@ def download_via_rapidapi(video_url, dest_path, method="aria2c"):
         audio_items = data.get("audios", {}).get("items", [])
         best_audio_link = None
         if audio_items:
-            best_audio_link = audio_items[0].get("url")
-            print(f"🎵 [ArbiFlow]: Найдена отдельная аудиодорожка.", flush=True)
+            print(f"🎵 [ArbiFlow]: Доступно аудио-дорожек: {len(audio_items)}", flush=True)
+            # Пытаемся найти русскую дорожку или ту, что помечена как оригинал/дефолт
+            for item in audio_items:
+                lang = str(item.get("language", "")).lower()
+                print(f"   - Дорожка: {lang} (original: {item.get('is_original')}, default: {item.get('default')})", flush=True)
+                # Проверяем на 'ru', 'original', 'default' или отсутствие языка (часто оригинал)
+                if "ru" in lang or item.get("is_original") or item.get("default") or not lang:
+                    best_audio_link = item.get("url")
+                    print(f"✅ [ArbiFlow]: Выбрана аудиодорожка: {lang if lang else 'original/default'}", flush=True)
+                    break
+            
+            if not best_audio_link:
+                best_audio_link = audio_items[0].get("url")
+                print(f"🎵 [ArbiFlow]: Найдена отдельная аудиодорожка (первая в списке).", flush=True)
 
         # 3. Скачиваем и склеиваем
         if best_audio_link:
@@ -670,14 +686,26 @@ async def handler(job):
             if is_url:
                 print(f"📥 [ArbiFlow Worker]: Starting download process...", flush=True)
                 
-                # 1. RapidAPI + aria2c
-                print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
-                success = download_via_rapidapi(video_url, input_video, method="aria2c")
+                is_youtube = "youtube.com" in video_url or "youtu.be" in video_url
                 
-                # 2. yt-dlp + Proxy + Cookies
-                if not success:
-                    print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to yt-dlp + Proxy...", flush=True)
+                if is_youtube:
+                    print(f"📺 [ArbiFlow Worker]: YouTube detected. Prioritizing yt-dlp for original language...", flush=True)
+                    # 1. yt-dlp + Proxy + Cookies (Best for YouTube language selection)
                     success = download_via_ytdlp(video_url, input_video)
+                    
+                    # 2. RapidAPI + aria2c (Fallback)
+                    if not success:
+                        print(f"2️⃣ [ArbiFlow Worker]: yt-dlp failed. Falling back to RapidAPI + aria2c...", flush=True)
+                        success = download_via_rapidapi(video_url, input_video, method="aria2c")
+                else:
+                    # 1. RapidAPI + aria2c (Default for other platforms)
+                    print(f"1️⃣ [ArbiFlow Worker]: Trying RapidAPI + aria2c...", flush=True)
+                    success = download_via_rapidapi(video_url, input_video, method="aria2c")
+                    
+                    # 2. yt-dlp + Proxy + Cookies (Fallback)
+                    if not success:
+                        print(f"2️⃣ [ArbiFlow Worker]: RapidAPI failed. Falling back to yt-dlp + Proxy...", flush=True)
+                        success = download_via_ytdlp(video_url, input_video)
 
                 # 3. Telegram Bots
                 if not success:
@@ -823,7 +851,7 @@ async def handler(job):
                 4. КРАТКОСТЬ: Описание (scene_topic) и причина (viral_reason) должны быть ОЧЕНЬ короткими — максимум 1 предложение (до 10 слов).
                 5. Длительность: строго от 20 до 90 секунд.
 
-                Найди от 0 до 3 лучших самостоятельных сцен. Если в блоке только скучный треп, реклама или обрывки — смело возвращай пустой массив. Лучше 0 сцен, чем плохая сцена.
+                Найди от 1 до 5 лучших самостоятельных сцен. Если в блоке только скучный треп, реклама или обрывки — смело возвращай пустой массив. Лучше 0 сцен, чем плохая сцена.
                 
                 ТРАНСКРИПТ:
                 {block['text']}
@@ -913,18 +941,19 @@ async def handler(job):
                 raise Exception("No valid scenes found in the video.")
                 
             valid_scenes.sort(key=lambda x: x.get('viral_score', 0), reverse=True)
-            top_scenes = valid_scenes[:20]
+            top_scenes = valid_scenes[:50]
             
             global_prompt = f"""
             Вот список лучших потенциальных вирусных сцен из видео:
             {json.dumps(top_scenes, ensure_ascii=False, indent=2)}
             
-            Твоя задача: выбрать от 3 до 8 САМЫХ ЛУЧШИХ сцен для публикации.
+            Твоя задача: выбрать от 5 до 10 САМЫХ ЛУЧШИХ сцен для публикации.
             
             ПРАВИЛА:
             1. Сцены НЕ ДОЛЖНЫ пересекаться по времени (start_time и end_time).
             2. Выбирай самые разнообразные по темам.
             3. Отдавай приоритет высокому viral_score.
+            4. Обязательно выбери не менее 5 сцен, если это возможно без потери качества. Если видео длинное, старайся выбрать ближе к 10 сценам.
             
             ВЫВОД СТРОГО В JSON:
             {{
